@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .models import (
@@ -227,8 +228,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     web_ui_dist = Path(__file__).resolve().parent.parent / "web-ui" / "dist"
     if web_ui_dist.is_dir():
-        from fastapi.staticfiles import StaticFiles
-
         app.mount(
             "/",
             StaticFiles(directory=str(web_ui_dist), html=True),
