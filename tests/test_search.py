@@ -1,5 +1,7 @@
+import json
+
 from service import db
-from service.search import build_windows, index_project, search
+from service.search import build_windows, index_project, reindex_all, search
 
 
 def _transcript():
@@ -115,4 +117,42 @@ def test_fts_special_query_does_not_raise(tmp_path):
     db.create_project(db_path, id="p1", name="Project One", platform="local")
     index_project(db_path, "p1", _transcript())
     result = search(db_path, '"foo" OR (bar*')
+    assert result["results"] == []
+
+
+def test_reindex_removes_project_without_transcript_cache(tmp_path):
+    db_path = str(tmp_path / "search.db")
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    db.create_project(db_path, id="p1", name="Project One", platform="local")
+    transcript_path = cache_dir / "p1_transcript.json"
+    transcript_path.write_text(
+        json.dumps(_transcript()),
+        encoding="utf-8",
+    )
+    assert reindex_all(db_path, str(cache_dir))["indexed"] == {"p1": 2}
+    transcript_path.unlink()
+    assert reindex_all(db_path, str(cache_dir)) == {"indexed": {}}
+    conn = db.connect(db_path)
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM search_windows WHERE project_id = 'p1'"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert search(db_path, "human")["results"] == []
+
+
+class OrthogonalEmbedder:
+    def embed(self, texts, task):
+        if task == "RETRIEVAL_QUERY":
+            return [[0.0, 1.0]]
+        return [[1.0, 0.0] for _ in texts]
+
+
+def test_orthogonal_semantic_search_returns_no_results(tmp_path):
+    db_path = str(tmp_path / "search.db")
+    db.create_project(db_path, id="p1", name="Project One", platform="local")
+    index_project(db_path, _transcript()["source_id"], _transcript(), embedder=OrthogonalEmbedder())
+    result = search(db_path, "unrelated", embedder=OrthogonalEmbedder())
     assert result["results"] == []

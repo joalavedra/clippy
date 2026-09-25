@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, fileUrl, ApiError, reindexSearch, searchFootage } from "./api";
 import type {
@@ -415,21 +415,32 @@ function SearchFootage({ projects }: { projects: Project[] }) {
   const [loading, setLoading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [error, setError] = useState("");
+  const seq = useRef(0);
 
   const runSearch = useCallback(async (value: string, projectId: string) => {
     const trimmed = value.trim();
     if (!trimmed) {
+      seq.current += 1;
       setResponse(null);
+      setLoading(false);
       return;
     }
+    const mine = ++seq.current;
     setLoading(true);
     setError("");
     try {
-      setResponse(await searchFootage(trimmed, projectId || undefined));
+      const nextResponse = await searchFootage(trimmed, projectId || undefined);
+      if (mine === seq.current) {
+        setResponse(nextResponse);
+      }
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.detail : "Unable to search footage");
+      if (mine === seq.current) {
+        setError(caught instanceof ApiError ? caught.detail : "Unable to search footage");
+      }
     } finally {
-      setLoading(false);
+      if (mine === seq.current) {
+        setLoading(false);
+      }
     }
   }, []);
 

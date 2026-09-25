@@ -314,6 +314,7 @@ class Worker(threading.Thread):
                     f"{project['id']}_transcript.json",
                 )
                 if not os.path.isfile(transcript_path):
+                    search.delete_project(self.settings.db_path, project["id"])
                     continue
                 try:
                     with open(transcript_path, encoding="utf-8") as handle:

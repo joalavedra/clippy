@@ -221,6 +221,33 @@ def index_project(
     return len(windows)
 
 
+def delete_project(db_path: str, project_id: str) -> None:
+    """Remove all indexed transcript data for a project."""
+    conn = db.connect(db_path)
+    try:
+        db.init_schema(conn)
+        window_ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT id FROM search_windows WHERE project_id = ?",
+                (project_id,),
+            )
+        ]
+        if window_ids:
+            conn.executemany(
+                "DELETE FROM search_embeddings WHERE window_id = ?",
+                ((window_id,) for window_id in window_ids),
+            )
+        conn.execute("DELETE FROM search_fts WHERE project_id = ?", (project_id,))
+        conn.execute(
+            "DELETE FROM search_windows WHERE project_id = ?",
+            (project_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _tokens(query: str) -> list[str]:
     return re.findall(r"\w+", query, flags=re.UNICODE)
 
@@ -313,10 +340,12 @@ def search(
                             vector = np.frombuffer(row["vector"], dtype="<f4")
                             norm = np.linalg.norm(vector)
                             if len(vector) == len(query_vector) and norm:
-                                semantic[row["window_id"]] = max(
-                                    0.0,
-                                    float(np.dot(query_vector, vector) / (query_norm * norm)),
+                                similarity = float(
+                                    np.dot(query_vector, vector)
+                                    / (query_norm * norm)
                                 )
+                                if similarity > 0:
+                                    semantic[row["window_id"]] = similarity
                 except Exception as exc:
                     LOGGER.warning("Could not search transcript embeddings: %s", exc)
         candidate_ids = set(lexical) | set(sorted(
@@ -391,6 +420,7 @@ def reindex_all(
     for project in db.list_projects(db_path):
         path = os.path.join(cache_dir, f"{project['id']}_transcript.json")
         if not os.path.isfile(path):
+            delete_project(db_path, project["id"])
             continue
         try:
             with open(path, encoding="utf-8") as handle:
