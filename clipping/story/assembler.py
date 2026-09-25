@@ -71,6 +71,11 @@ def trim_scene(
             "-t", f"{duration:.3f}",
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-c:a", "aac", "-b:a", "192k",
+            "-af",
+            (
+                "afade=t=in:st=0:d=0.03,"
+                f"afade=t=out:st={max(0.0, duration - 0.03):.3f}:d=0.03"
+            ),
             "-avoid_negative_ts", "make_zero",
             output_path,
         ]

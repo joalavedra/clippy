@@ -74,6 +74,7 @@ class JobOptions(BaseModel):
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     story_style: Literal["styled"] = "styled"
+    clean_speech: bool = False
     gemini_timeout: int = Field(default=180, gt=0)
     project_name: str | None = None
 

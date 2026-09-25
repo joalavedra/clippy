@@ -656,6 +656,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Story render style. Director defaults to styled; Story mode defaults to clean.",
     )
+    story_group.add_argument(
+        "--no-cut-sheets",
+        action="store_true",
+        default=False,
+        help="Disable Story render cut-sheet generation.",
+    )
+    story_group.add_argument(
+        "--clean-speech",
+        action="store_true",
+        default=False,
+        help="Remove filler words and long dead-air gaps from Story scenes.",
+    )
 
     # --- Director Stage ---
     director_group = p.add_argument_group("Director Stage")
@@ -1037,6 +1049,8 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         ),
         skip_download=args.skip_download,
         story_style=args.story_style,
+        story_cut_sheets=not args.no_cut_sheets,
+        clean_speech=args.clean_speech,
         # Director Stage
         director=args.director,
         brief=args.brief,
