@@ -12,6 +12,8 @@ dependencies (faster_whisper, yt_dlp) at module level.
 import os
 import shutil
 
+from ..ingest_errors import DownloadError, classify_download_error
+
 
 # ==============================================================================
 # CACHE DIRECTORY
@@ -43,6 +45,8 @@ def _download_single_source(
     source: dict,
     cache_dir: str,
     download_source_height: str | int = "max",
+    cookies_file: str | None = None,
+    retries: int = 2,
 ) -> str:
     """
     Download a single source video and cache it.
@@ -113,18 +117,34 @@ def _download_single_source(
     # Lazy import to avoid pulling in heavy deps (faster_whisper, yt_dlp)
     from .. import engine
 
-    engine.download_video(
-        url=url,
-        output_path=cached_path,
-        use_dlp_subs=False,  # No subtitle download for story sources
-        download_source_height=download_source_height,
-        source_platform=platform,
-    )
+    try:
+        engine.download_video(
+            url=url,
+            output_path=cached_path,
+            use_dlp_subs=False,  # No subtitle download for story sources
+            download_source_height=download_source_height,
+            source_platform=platform,
+            cookies_file=cookies_file,
+            retries=retries,
+        )
+    except DownloadError as exc:
+        exc.source_id = exc.source_id or sid
+        raise
+    except Exception as exc:
+        raise DownloadError(
+            classify_download_error(exc),
+            source_id=sid,
+            detail=str(exc),
+        ) from exc
 
     if not os.path.exists(cached_path):
-        raise RuntimeError(
-            f"❌ Download gagal untuk source '{sid}' — "
-            f"file tidak ditemukan di {cached_path}"
+        raise DownloadError(
+            "unknown",
+            source_id=sid,
+            detail=(
+                f"❌ Download gagal untuk source '{sid}' — "
+                f"file tidak ditemukan di {cached_path}"
+            ),
         )
 
     size_mb = os.path.getsize(cached_path) / (1024 * 1024)
@@ -140,6 +160,10 @@ def download_all_sources(
     source_registry: dict[str, dict],
     cache_dir: str,
     download_source_height: str | int = "max",
+    cookies_file: str | None = None,
+    retries: int = 2,
+    strict: bool = True,
+    outputs_dir: str | None = None,
 ) -> dict[str, str]:
     """
     Download all sources listed in the registry.
@@ -163,17 +187,33 @@ def download_all_sources(
 
     paths: dict[str, str] = {}
     failed: list[str] = []
+    first_error: DownloadError | None = None
 
     for idx, (sid, source) in enumerate(source_registry.items(), 1):
         print(f"[{idx}/{total}] Source: {source.get('name', sid)}")
         try:
             path = _download_single_source(
-                source, cache_dir, download_source_height
+                source,
+                cache_dir,
+                download_source_height,
+                cookies_file,
+                retries,
             )
             paths[sid] = path
         except Exception as e:
             print(f"   ⚠️ GAGAL download '{sid}': {e}")
             failed.append(sid)
+            if isinstance(e, DownloadError):
+                if e.source_id is None:
+                    e.source_id = sid
+                if first_error is None:
+                    first_error = e
+            elif first_error is None:
+                first_error = DownloadError(
+                    classify_download_error(e),
+                    source_id=sid,
+                    detail=str(e),
+                )
 
     # --- Summary ---
     print(f"\n{'='*50}")
@@ -181,6 +221,24 @@ def download_all_sources(
     if failed:
         print(f"   ❌ Gagal: {', '.join(failed)}")
     print(f"{'='*50}\n")
+
+    if failed and strict:
+        if first_error is None:
+            first_error = DownloadError(
+                "unknown",
+                source_id=failed[0],
+                detail="; ".join(failed),
+            )
+        first_error.source_id = first_error.source_id or failed[0]
+        first_error.detail = (
+            f"{first_error.detail}\nFailed sources: {', '.join(failed)}"
+        )
+        save_sources_status(
+            source_registry,
+            paths,
+            outputs_dir or cache_dir,
+        )
+        raise first_error
 
     return paths
 
@@ -219,6 +277,7 @@ def save_sources_status(
         status_entries.append(entry)
 
     status_path = os.path.join(outputs_dir, "sources_status.json")
+    os.makedirs(outputs_dir, exist_ok=True)
     with open(status_path, "w", encoding="utf-8") as f:
         json.dump({"sources": status_entries}, f, indent=2, ensure_ascii=False)
 

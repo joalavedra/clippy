@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass, field
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -39,6 +42,15 @@ class Settings:
     media_secret: str | None = field(
         default_factory=lambda: os.environ.get("CLIPPY_MEDIA_SECRET")
     )
+    ytdlp_cookies: str | None = field(
+        default_factory=lambda: os.environ.get("CLIPPY_YTDLP_COOKIES")
+    )
+    download_retries: int = field(
+        default_factory=lambda: max(
+            0,
+            min(int(os.environ.get("CLIPPY_DOWNLOAD_RETRIES", "2")), 5),
+        )
+    )
     local_media_roots: list[str] | None = None
     cors_origins: list[str] = field(
         default_factory=lambda: [
@@ -58,6 +70,12 @@ class Settings:
 
     def __post_init__(self):
         self.data_dir = os.path.abspath(self.data_dir)
+        if self.ytdlp_cookies and not os.path.isfile(self.ytdlp_cookies):
+            LOGGER.warning(
+                "Ignoring CLIPPY_YTDLP_COOKIES because file does not exist: %s",
+                self.ytdlp_cookies,
+            )
+            self.ytdlp_cookies = None
         if self.media_secret is None and self.api_key is not None:
             self.media_secret = hashlib.sha256(
                 b"clippy-media:" + self.api_key.encode()

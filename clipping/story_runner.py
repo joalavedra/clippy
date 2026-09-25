@@ -133,7 +133,13 @@ def _prepare_source_cache(
         print(f"\n[2/6] Downloading sources → {cache_dir}")
         download_height = getattr(cfg, "download_source_height", "max")
         cached_paths = source_manager.download_all_sources(
-            source_registry, cache_dir, download_height
+            source_registry,
+            cache_dir,
+            download_height,
+            getattr(cfg, "ytdlp_cookies", None),
+            getattr(cfg, "download_retries", 2),
+            getattr(cfg, "strict_sources", False),
+            cfg.outputs_dir,
         )
 
     source_manager.save_sources_status(
@@ -192,6 +198,10 @@ def run_story_pipeline(cfg) -> list[dict]:
     recipe_path = getattr(cfg, "story_recipe_path", "story_recipe.json")
     print(f"\n[4/6] Loading recipe: {recipe_path}")
     recipe = loader.load_recipe(recipe_path, source_registry)
+    if getattr(cfg, "clean_speech", False):
+        from .director import apply_clean_speech
+
+        apply_clean_speech(recipe, transcripts)
 
     # ------------------------------------------------------------------
     # Step 5 — Assemble each clip

@@ -74,6 +74,8 @@ def run_pipeline(cfg) -> list[dict]:
             getattr(cfg, "use_dlp_subs", False),
             getattr(cfg, "download_source_height", "max"),
             source_platform=source_platform,
+            cookies_file=getattr(cfg, "ytdlp_cookies", None),
+            retries=getattr(cfg, "download_retries", 2),
         )
 
     # Step 2 — Transcribe
