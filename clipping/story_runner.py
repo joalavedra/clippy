@@ -192,6 +192,10 @@ def run_story_pipeline(cfg) -> list[dict]:
     recipe_path = getattr(cfg, "story_recipe_path", "story_recipe.json")
     print(f"\n[4/6] Loading recipe: {recipe_path}")
     recipe = loader.load_recipe(recipe_path, source_registry)
+    if getattr(cfg, "clean_speech", False):
+        from .director import apply_clean_speech
+
+        apply_clean_speech(recipe, transcripts)
 
     # ------------------------------------------------------------------
     # Step 5 — Assemble each clip
