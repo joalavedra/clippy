@@ -233,6 +233,11 @@ def buat_video_hybrid(
 
         current_time += STEP_DETEKSI
 
+    shot_cuts = camera_path.detect_cuts(
+        cap, start_clip, duration, orig_fps, threshold=25.0
+    )
+    print(f"[camera] {len(shot_cuts)} shot cuts detected", flush=True)
+
     # FASE 2: SMOOTH CAMERA
     smooth_data = []
     if raw_data:
@@ -248,8 +253,9 @@ def buat_video_hybrid(
         temp_snap = SNAP_THRESHOLD if SNAP_THRESHOLD < 0.1 else 0.08
         snap_px = width * temp_snap
         consecutive_misses = 0
+        last_cut_snap = None
 
-        for d in raw_data:
+        for index, d in enumerate(raw_data):
             force_glide = False
             if not d.get("detected", False):
                 consecutive_misses += 1
@@ -275,8 +281,29 @@ def buat_video_hybrid(
             if force_glide:
                 cam_cx += (face_cx - cam_cx) * SMOOTH_FACTOR
             elif abs(face_cx - cam_cx) > snap_px:
-                cam_cx = face_cx
-                snapped = True
+                cut_at = camera_path.nearest_cut(
+                    shot_cuts, d["time"], tolerance=0.3
+                )
+                next_sample = raw_data[index + 1] if index + 1 < len(raw_data) else None
+                confirmed = bool(
+                    next_sample
+                    and abs(next_sample["cx"] - face_cx) <= snap_px / 2
+                )
+                repeated_cut = (
+                    cut_at is not None
+                    and last_cut_snap is not None
+                    and abs(cut_at - last_cut_snap) < 1e-6
+                )
+                if (cut_at is not None and not repeated_cut) or (
+                    cut_at is None and confirmed
+                ):
+                    cam_cx = face_cx
+                    snapped = True
+                    if cut_at is not None:
+                        last_cut_snap = cut_at
+                else:
+                    face_cx = cam_cx
+                    cam_cx += (face_cx - cam_cx) * SMOOTH_FACTOR
             else:
                 if face_cx > cam_cx + deadzone_px:
                     cam_cx += (face_cx - (cam_cx + deadzone_px)) * SMOOTH_FACTOR
@@ -296,7 +323,10 @@ def buat_video_hybrid(
             )
 
         camera_path.mark_snaps(smooth_data, snap_px)
-        camera_path.refine_snap_times(smooth_data, cap, start_clip, orig_fps)
+        camera_path.mark_cut_snaps(smooth_data, shot_cuts)
+        camera_path.refine_snap_times(
+            smooth_data, shot_cuts, STEP_DETEKSI
+        )
 
     def get_x(t):
         return camera_path.interp(

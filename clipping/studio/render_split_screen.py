@@ -483,6 +483,11 @@ def buat_video_split_screen(
                 d_near = min([abs(fc[0] - face[0]) for fc in others]) if others else width
                 raw_data[spk].append({"time": fd["time"], "cx": face[0], "cy": face[1], "dist": d_near})
 
+    shot_cuts = camera_path.detect_cuts(
+        cap, start_clip, duration, orig_fps, threshold=25.0
+    )
+    print(f"[camera] {len(shot_cuts)} shot cuts detected", flush=True)
+
     # ================================================================
     # FASE 1.5 — Determine Stable Global Zoom
     # ================================================================
@@ -600,14 +605,35 @@ def buat_video_split_screen(
         temp_snap = SNAP_THRESHOLD if SNAP_THRESHOLD < 0.1 else 0.08
         # temp_snap = SNAP_THRESHOLD if SNAP_THRESHOLD < 0.1 else 0.04
         snap_px = width * temp_snap
+        last_cut_snap = None
 
-        for d in raw_list:
+        for index, d in enumerate(raw_list):
             face_cx = d["cx"]
             face_cy = d["cy"]
             snapped = False
             if abs(face_cx - cam_cx) > snap_px:
-                cam_cx = face_cx
-                snapped = True
+                cut_at = camera_path.nearest_cut(
+                    shot_cuts, d["time"], tolerance=0.3
+                )
+                next_sample = raw_list[index + 1] if index + 1 < len(raw_list) else None
+                confirmed = bool(
+                    next_sample
+                    and abs(next_sample["cx"] - face_cx) <= snap_px / 2
+                )
+                repeated_cut = (
+                    cut_at is not None
+                    and last_cut_snap is not None
+                    and abs(cut_at - last_cut_snap) < 1e-6
+                )
+                if (cut_at is not None and not repeated_cut) or (
+                    cut_at is None and confirmed
+                ):
+                    cam_cx = face_cx
+                    snapped = True
+                    if cut_at is not None:
+                        last_cut_snap = cut_at
+                else:
+                    face_cx = cam_cx
             else:
                 if face_cx > cam_cx + deadzone_px:
                     cam_cx += (face_cx - (cam_cx + deadzone_px)) * SMOOTH_FACTOR
@@ -633,7 +659,10 @@ def buat_video_split_screen(
     }
     for samples in smooth.values():
         camera_path.mark_snaps(samples, width * SNAP_THRESHOLD)
-        camera_path.refine_snap_times(samples, cap, start_clip, orig_fps)
+        camera_path.mark_cut_snaps(samples, shot_cuts)
+        camera_path.refine_snap_times(
+            samples, shot_cuts, STEP_DETEKSI
+        )
 
     def _get_pos_full(speaker: str, t: float) -> tuple[float, float, float]:
         sd = smooth.get(speaker, [])
@@ -656,6 +685,14 @@ def buat_video_split_screen(
             if all_frame_data[i]["time"] <= t <= all_frame_data[i + 1]["time"]:
                 b1s = all_frame_data[i]["face_boxes"]
                 b2s = all_frame_data[i + 1]["face_boxes"]
+
+                cut_at = camera_path.cut_between(
+                    shot_cuts,
+                    all_frame_data[i]["time"],
+                    all_frame_data[i + 1]["time"],
+                )
+                if cut_at is not None:
+                    return b1s if t < cut_at else b2s
                 
                 # Simple approach: if counts match, interpolate. Else just return nearest.
                 if len(b1s) != len(b2s):
@@ -742,9 +779,77 @@ def buat_video_split_screen(
     face_count_history = []
     # (MIN_HOLD is already initialized above)
     is_dynamic = getattr(cfg, "use_dynamic_split", False)
-    
-    # Scene cut detection state
-    prev_small_gray = None
+    layout_timeline = camera_path.LayoutTimeline("split")
+    if is_dynamic and all_frame_data:
+        def _layout_observation(frame_data):
+            if cfg.split_trigger == "face":
+                count = len(frame_data["face_boxes"])
+                if count == 1:
+                    return "full"
+                if count >= 2:
+                    return "split"
+                return None
+            active = get_active_speakers(
+                diarization_data, start_clip + frame_data["time"]
+            )
+            if len(active) == 1:
+                return "full"
+            if len(active) >= 2:
+                return "split"
+            return None
+
+        first_observation = "split"
+        for frame_data in all_frame_data:
+            observation = _layout_observation(frame_data)
+            if observation is not None:
+                first_observation = observation
+                break
+        layout_timeline = camera_path.LayoutTimeline(first_observation)
+        pending_layout = None
+        pending_count = 0
+        current_timeline_layout = first_observation
+        applied_cut_times = set()
+        for frame_data in all_frame_data:
+            observed_layout = _layout_observation(frame_data)
+            if observed_layout is None:
+                pending_layout = None
+                pending_count = 0
+                continue
+            if observed_layout == current_timeline_layout:
+                pending_layout = None
+                pending_count = 0
+                continue
+
+            nearest_cut = None
+            if shot_cuts:
+                candidate_cut = min(
+                    shot_cuts,
+                    key=lambda value: abs(value - frame_data["time"]),
+                )
+                if abs(candidate_cut - frame_data["time"]) <= 0.3:
+                    nearest_cut = candidate_cut
+
+            if nearest_cut is not None:
+                cut_key = round(nearest_cut, 6)
+                if cut_key in applied_cut_times:
+                    continue
+                layout_timeline.add(nearest_cut, observed_layout)
+                applied_cut_times.add(cut_key)
+                current_timeline_layout = observed_layout
+                pending_layout = None
+                pending_count = 0
+            elif observed_layout == pending_layout:
+                pending_count += 1
+                if pending_count >= 2:
+                    layout_timeline.add(frame_data["time"], observed_layout)
+                    current_timeline_layout = observed_layout
+                    pending_layout = None
+                    pending_count = 0
+            else:
+                pending_layout = observed_layout
+                pending_count = 1
+
+    # Scene cut threshold is retained for the dev HUD.
     SCENE_CUT_THRESHOLD = getattr(cfg, "scene_cut_threshold", 18) # Lower = more sensitive to camera cuts
 
     try:
@@ -775,103 +880,30 @@ def buat_video_split_screen(
                         3,
                     )
 
-            # --- Scene Cut Detection ---
-            # Lightweight check: if pixels change drastically, clear stability history to allow instant switch
-            scene_cut_this_frame = False
-            curr_small = _resize_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (64, 64))
-            if prev_small_gray is not None:
-                diff = cv2.absdiff(curr_small, prev_small_gray)
-                avg_diff = np.mean(diff)
-                if avg_diff > SCENE_CUT_THRESHOLD:
-                    face_count_history.clear()
-                    last_switch_time = t - MIN_HOLD
-                    scene_cut_this_frame = True
-            prev_small_gray = curr_small
+            # Shot cuts are detected once before rendering and drive all
+            # hard layout changes. Avoid per-frame visual heuristics here,
+            # which can flap on wide two-shots.
+            avg_diff = 0.0
 
             timestamp_abs = start_clip + t
-            from clipping.diarization import get_active_speakers
             active_speakers = get_active_speakers(diarization_data, timestamp_abs)
             active_speaker = get_active_speaker(diarization_data, timestamp_abs)
 
             # --- Layout decision logic ---
             if is_dynamic:
-                if cfg.split_trigger == "face":
-                    now_boxes = _get_all_boxes(t)
-                    now_count = len(now_boxes)
-                    face_count_history.append(now_count)
-                    if len(face_count_history) > LAYOUT_SMOOTH_WINDOW:
-                        face_count_history.pop(0)
-                    
-                    # Majority vote face count
-                    if face_count_history:
-                        stable_count = max(set(face_count_history), key=face_count_history.count)
-                    else:
-                        stable_count = now_count
-
-                    # FAST PATH: split→full — instant when 1 face detected
-                    # Only trigger instant layout switch if an actual camera cut happened.
-                    # Otherwise, use the stable majority vote to prevent false positives.
-                    force_full = False
-                    if current_layout == "split":
-                        if scene_cut_this_frame and now_count == 1:
-                            force_full = True
-                    
-                    # FAST PATH: full→split — instant when 2 faces detected
-                    force_split = False
+                target_layout = layout_timeline.lookup(t)
+                if target_layout != current_layout:
+                    current_layout = target_layout
+                    prev_speaker_split = current_speaker
                     if current_layout == "full":
-                        if scene_cut_this_frame and now_count >= 2:
-                            force_split = True
-                        elif now_count >= 2 and stable_count >= 2:
-                            force_split = True
-                    
-                    if force_full:
-                        current_layout = "full"
-                        prev_speaker_split = current_speaker
                         current_speaker = active_speaker or ranked[0]
-                        is_new_switch_split = prev_speaker_split is not None and prev_speaker_split != current_speaker
-                        last_switch_time = t
-                        face_count_history.clear()
-                    elif force_split:
-                        current_layout = "split"
+                    else:
                         current_speaker = ranked[0]
-                        is_new_switch_split = False
-                        last_switch_time = t
-                        face_count_history.clear()
-                    else:
-                        # Normal path: use stable_count (guarded by MIN_HOLD)
-                        if stable_count == 1:
-                            target_layout = "full"
-                            target_speaker = ranked[0]
-                        elif stable_count >= 2:
-                            target_layout = "split"
-                            target_speaker = ranked[0]
-                        else:
-                            target_layout = current_layout
-                            target_speaker = current_speaker
-
-                        if target_layout != current_layout and (t - last_switch_time) >= MIN_HOLD:
-                            current_layout = target_layout
-                            prev_speaker_split = current_speaker
-                            current_speaker = target_speaker
-                            is_new_switch_split = prev_speaker_split is not None and prev_speaker_split != current_speaker
-                            last_switch_time = t
-                else:
-                    if len(active_speakers) == 1:
-                        target_layout = "full"
-                        target_speaker = active_speakers[0]
-                    elif len(active_speakers) >= 2:
-                        target_layout = "split"
-                        target_speaker = active_speakers[0] # Not used in split but for tracking
-                    else:
-                        target_layout = current_layout # Stay put
-                        target_speaker = current_speaker
-                
-                    if target_layout != current_layout and (t - last_switch_time) >= MIN_HOLD:
-                        current_layout = target_layout
-                        prev_speaker_split = current_speaker
-                        current_speaker = target_speaker
-                        is_new_switch_split = prev_speaker_split is not None and prev_speaker_split != current_speaker
-                        last_switch_time = t
+                    is_new_switch_split = (
+                        prev_speaker_split is not None
+                        and prev_speaker_split != current_speaker
+                    )
+                    last_switch_time = t
                 
                 if current_layout == "full":
                     # Switch speaker if audio trigger is active, or stay on tracked
@@ -884,6 +916,16 @@ def buat_video_split_screen(
                                 last_switch_time = t
             else:
                 current_layout = "split"
+
+            now_count = len(_get_all_boxes(t))
+            face_count_history.append(now_count)
+            if len(face_count_history) > LAYOUT_SMOOTH_WINDOW:
+                face_count_history.pop(0)
+            stable_count = (
+                max(set(face_count_history), key=face_count_history.count)
+                if face_count_history
+                else now_count
+            )
 
             if current_layout == "full":
                 # Solo mode: Render full 9:16 crop
@@ -1188,4 +1230,3 @@ def buat_video_split_screen(
         return int(tracking_log[-1][1])
 
     return get_x_final
-

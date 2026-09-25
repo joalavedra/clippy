@@ -338,6 +338,11 @@ def buat_video_camera_switch(
             d_near = min([abs(fc[0] - best[0]) for fc in others]) if others else width
             raw_data[spk].append({"time": fd["time"], "cx": best[0], "cy": best[1], "dist": d_near})
 
+    shot_cuts = camera_path.detect_cuts(
+        cap, start_clip, duration, orig_fps, threshold=25.0
+    )
+    print(f"[camera] {len(shot_cuts)} shot cuts detected", flush=True)
+
     # ================================================================
     # FASE 2 — Smooth per-speaker camera positions
     # ================================================================
@@ -376,14 +381,35 @@ def buat_video_camera_switch(
         
         deadzone_px = crop_w * DEADZONE_RATIO
         snap_px = width * SNAP_THRESHOLD
+        last_cut_snap = None
         
-        for d in raw_list:
+        for index, d in enumerate(raw_list):
             face_cx = d["cx"]
             face_cy = d["cy"]
             snapped = False
             if abs(face_cx - cam_cx) > snap_px:
-                cam_cx = face_cx
-                snapped = True
+                cut_at = camera_path.nearest_cut(
+                    shot_cuts, d["time"], tolerance=0.3
+                )
+                next_sample = raw_list[index + 1] if index + 1 < len(raw_list) else None
+                confirmed = bool(
+                    next_sample
+                    and abs(next_sample["cx"] - face_cx) <= snap_px / 2
+                )
+                repeated_cut = (
+                    cut_at is not None
+                    and last_cut_snap is not None
+                    and abs(cut_at - last_cut_snap) < 1e-6
+                )
+                if (cut_at is not None and not repeated_cut) or (
+                    cut_at is None and confirmed
+                ):
+                    cam_cx = face_cx
+                    snapped = True
+                    if cut_at is not None:
+                        last_cut_snap = cut_at
+                else:
+                    face_cx = cam_cx
             else:
                 if face_cx > cam_cx + deadzone_px:
                     cam_cx += (face_cx - (cam_cx + deadzone_px)) * SMOOTH_FACTOR
@@ -413,7 +439,10 @@ def buat_video_camera_switch(
     }
     for samples in smooth.values():
         camera_path.mark_snaps(samples, width * SNAP_THRESHOLD)
-        camera_path.refine_snap_times(samples, cap, start_clip, orig_fps)
+        camera_path.mark_cut_snaps(samples, shot_cuts)
+        camera_path.refine_snap_times(
+            samples, shot_cuts, STEP_DETEKSI
+        )
 
     def _get_pos_cs(speaker, t):
         sd = smooth.get(speaker, [])
@@ -765,4 +794,3 @@ def buat_video_camera_switch(
         cap.release()
         for bc in broll_caps:
             bc["cap"].release()
-
