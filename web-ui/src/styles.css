@@ -55,7 +55,7 @@ h1 { font-size: 27px; letter-spacing: -.045em; margin-top: 4px; }
 h2 { font-size: 18px; letter-spacing: -.025em; }
 h3 { font-size: 14px; letter-spacing: -.01em; line-height: 1.35; }
 .page-subtitle { color: var(--text-muted); margin-top: 5px; }
-.button { border-radius: 8px; border: 1px solid var(--border); min-height: 34px; padding: 0 14px; font-weight: 700; white-space: nowrap; }
+.button { border-radius: 8px; border: 1px solid var(--border); min-height: 34px; padding: 0 14px; font-weight: 700; white-space: nowrap; }.download-button { display: inline-flex; align-items: center; text-decoration: none; }
 .button-primary { color: white; background: var(--accent); border-color: var(--accent); }.button-primary:hover { filter: brightness(.94); }
 .button-secondary { background: var(--surface); color: var(--text); }.button-secondary:hover { border-color: #bbc2cc; }
 .button-quiet { border-color: transparent; background: transparent; color: var(--text-muted); }.button-danger { color: var(--danger); background: #fff; }

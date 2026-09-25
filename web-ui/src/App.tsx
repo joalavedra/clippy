@@ -11,7 +11,6 @@ import type {
   Platform,
   Project,
   Ratio,
-  Render,
 } from "./types";
 import {
   Button,
@@ -27,6 +26,34 @@ type ViewMode = "cards" | "table";
 
 const ratios: Ratio[] = ["9:16", "16:9", "1:1"];
 const states: AssetState[] = ["not_planned", "planned", "ready", "posted"];
+const ratioOrder: Record<string, number> = { "9:16": 0, "16:9": 1, "1:1": 2 };
+
+interface ClipGroup {
+  key: string;
+  primary: Asset;
+  variants: Asset[];
+}
+
+function groupAssets(assets: Asset[]): ClipGroup[] {
+  const grouped = new Map<string, Asset[]>();
+  assets.forEach((asset) => {
+    const key = `${asset.job_id}:${asset.clip_id}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), asset]);
+  });
+  return [...grouped.entries()].map(([key, variants]) => {
+    const sorted = [...variants].sort((left, right) =>
+      right.viral_score - left.viral_score
+      || (ratioOrder[left.renders[0]?.ratio ?? ""] ?? 99) - (ratioOrder[right.renders[0]?.ratio ?? ""] ?? 99),
+    );
+    return {
+      key,
+      primary: sorted[0],
+      variants: [...variants].sort((left, right) =>
+        (ratioOrder[left.renders[0]?.ratio ?? ""] ?? 99) - (ratioOrder[right.renders[0]?.ratio ?? ""] ?? 99),
+      ),
+    };
+  });
+}
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -146,16 +173,17 @@ function FilterBar({
 }
 
 function AssetCard({
-  asset,
+  group,
   projects,
   onOpen,
   onFavorite,
 }: {
-  asset: Asset;
+  group: ClipGroup;
   projects: Project[];
   onOpen: () => void;
   onFavorite: () => void;
 }) {
+  const asset = group.primary;
   const render = asset.renders[0];
   return (
     <article className="asset-card" onClick={onOpen}>
@@ -169,7 +197,7 @@ function AssetCard({
         <h3>{asset.title}</h3>
         <div className="asset-subline">
           <span className="project-chips">{asset.project_ids.map((id) => <Chip key={id}>{projectName(projects, id)}</Chip>)}</span>
-          <span className="render-badges">{asset.renders.map((item) => <RatioBadge ratio={item.ratio} key={item.id} />)}</span>
+          <span className="render-badges">{group.variants.map((variant) => <RatioBadge ratio={variant.renders[0]?.ratio ?? "—"} key={variant.id} />)}</span>
         </div>
         <div className="asset-meta"><StateChip state={asset.state} /><span>{formatDate(asset.created_at)}</span></div>
       </div>
@@ -178,68 +206,71 @@ function AssetCard({
 }
 
 function AssetTable({
-  assets,
+  groups,
   projects,
   onOpen,
   onFavorite,
   onState,
 }: {
-  assets: Asset[];
+  groups: ClipGroup[];
   projects: Project[];
-  onOpen: (asset: Asset) => void;
+  onOpen: (group: ClipGroup) => void;
   onFavorite: (asset: Asset) => void;
   onState: (asset: Asset, state: AssetState) => void;
 }) {
   return (
     <div className="asset-table-wrap">
       <table className="asset-table"><thead><tr><th>Date</th><th>Video</th><th>Renders</th><th>State</th><th>★</th></tr></thead>
-        <tbody>{assets.map((asset) => <tr key={asset.id}>
+        <tbody>{groups.map((group) => { const asset = group.primary; return <tr key={group.key}>
           <td className="muted-cell">{formatDate(asset.created_at)}</td>
-          <td><button className="table-video" onClick={() => onOpen(asset)}><span className="table-thumb">{asset.renders[0]?.thumb_url ? <img src={fileUrl(asset.renders[0].thumb_url) ?? undefined} alt="" /> : "—"}</span><span><strong>{asset.title}</strong><small>{projectName(projects, asset.project_ids[0] ?? "")}</small></span><ScoreBadge score={asset.viral_score} /></button></td>
-          <td><div className="table-ratios">{asset.renders.map((render) => <RatioBadge ratio={render.ratio} key={render.id} />)}</div></td>
+          <td><button className="table-video" onClick={() => onOpen(group)}><span className="table-thumb">{asset.renders[0]?.thumb_url ? <img src={fileUrl(asset.renders[0].thumb_url) ?? undefined} alt="" /> : "—"}</span><span><strong>{asset.title}</strong><small>{projectName(projects, asset.project_ids[0] ?? "")}</small></span><ScoreBadge score={asset.viral_score} /></button></td>
+          <td><div className="table-ratios">{group.variants.map((variant) => <RatioBadge ratio={variant.renders[0]?.ratio ?? "—"} key={variant.id} />)}</div></td>
           <td><select value={asset.state} onChange={(event) => onState(asset, event.target.value as AssetState)}><option value="not_planned">not planned</option><option value="planned">planned</option><option value="ready">ready</option><option value="posted">posted</option></select></td>
           <td><button className={`table-star ${asset.favorite ? "favorite-on" : ""}`} onClick={() => onFavorite(asset)}>★</button></td>
-        </tr>)}</tbody>
+        </tr>; })}</tbody>
       </table>
     </div>
   );
 }
 
 function AssetDrawer({
-  asset,
+  group,
   projects,
   onClose,
   onPatch,
 }: {
-  asset: Asset;
+  group: ClipGroup;
   projects: Project[];
   onClose: () => void;
-  onPatch: (patch: { state?: AssetState; favorite?: boolean }) => void;
+  onPatch: (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => void;
 }) {
-  const [selected, setSelected] = useState<Render>(asset.renders[0]);
+  const [selected, setSelected] = useState<Asset>(group.primary);
   const [tab, setTab] = useState<"transcript" | "social" | "covers">("transcript");
-  useEffect(() => setSelected(asset.renders[0]), [asset]);
+  useEffect(() => {
+    setSelected(group.variants.find((variant) => variant.id === selected.id) ?? group.primary);
+  }, [group]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
   const copy = (value: string) => navigator.clipboard?.writeText(value);
+  const selectedRender = selected.renders[0];
   return (
     <div className="drawer-layer">
       <div className="drawer-scrim" onClick={onClose} />
       <aside className="asset-drawer">
-        <div className="drawer-header"><div><div className="eyebrow">CLIP {asset.clip_id}</div><h2>{asset.title}</h2><div className="drawer-project">{asset.project_ids.map((id) => <Chip key={id}>{projectName(projects, id)}</Chip>)}</div></div><button className="close-button" onClick={onClose}>×</button></div>
-        <div className="drawer-summary"><ScoreBadge score={asset.viral_score} />{selected && <DurationBadge duration={selected.duration} />}<StateChip state={asset.state} /></div>
-        <div className="format-toggle">{asset.renders.map((render) => <button className={selected?.id === render.id ? "format-selected" : ""} key={render.id} onClick={() => setSelected(render)}>{render.ratio === "9:16" ? "Vertical" : render.ratio === "16:9" ? "Horizontal" : "Square"}<small>{render.ratio}</small></button>)}</div>
-        {selected && <video className={`drawer-video ratio-${selected.ratio.replace(":", "-")}`} controls src={fileUrl(selected.url) ?? undefined} />}
+        <div className="drawer-header"><div><div className="eyebrow">CLIP {selected.clip_id}</div><h2>{selected.title}</h2><div className="drawer-project">{selected.project_ids.map((id) => <Chip key={id}>{projectName(projects, id)}</Chip>)}</div></div><button className="close-button" onClick={onClose}>×</button></div>
+        <div className="drawer-summary"><ScoreBadge score={selected.viral_score} />{selectedRender && <DurationBadge duration={selectedRender.duration} />}<StateChip state={selected.state} /></div>
+        <div className="format-toggle">{group.variants.map((variant) => { const render = variant.renders[0]; return <button className={selected.id === variant.id ? "format-selected" : ""} key={variant.id} onClick={() => setSelected(variant)}>{render?.ratio === "9:16" ? "Vertical" : render?.ratio === "16:9" ? "Horizontal" : "Square"}<small>{render?.ratio}</small></button>; })}</div>
+        {selectedRender && <video className={`drawer-video ratio-${selectedRender.ratio.replace(":", "-")}`} controls src={fileUrl(selectedRender.url) ?? undefined} />}
         <div className="drawer-tabs">{(["transcript", "social", "covers"] as const).map((item) => <button className={tab === item ? "tab-active" : ""} key={item} onClick={() => setTab(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}</div>
         <div className="drawer-panel">
-          {tab === "transcript" && <div className="copy-blocks"><CopyBlock label="Hook" value={asset.hook_line} onCopy={copy} /><CopyBlock label="Why it works" value={asset.rationale} onCopy={copy} /></div>}
-          {tab === "social" && <div className="copy-blocks"><CopyBlock label="Title" value={asset.title} onCopy={copy} /><CopyBlock label="Description" value={String(asset.metadata.description ?? "") || "No description yet"} onCopy={copy} /><div><div className="block-label">Hashtags</div><div className="hashtag-list">{(asset.metadata.hashtags ?? asset.hashtags).map((tag) => <Chip key={tag}>#{String(tag).replace(/^#/, "")}</Chip>)}</div></div></div>}
+          {tab === "transcript" && <div className="copy-blocks"><CopyBlock label="Hook" value={selected.hook_line} onCopy={copy} /><CopyBlock label="Why it works" value={selected.rationale} onCopy={copy} /></div>}
+          {tab === "social" && <div className="copy-blocks"><CopyBlock label="Title" value={selected.title} onCopy={copy} /><CopyBlock label="Description" value={String(selected.metadata.description ?? "") || "No description yet"} onCopy={copy} /><div><div className="block-label">Hashtags</div><div className="hashtag-list">{(selected.metadata.hashtags ?? selected.hashtags).map((tag) => <Chip key={String(tag)}>#{String(tag).replace(/^#/, "")}</Chip>)}</div></div></div>}
           {tab === "covers" && <div className="empty-panel"><span className="empty-icon">✦</span><strong>Cover builder coming soon</strong><small>Headline suggestions and layout presets will land here.</small></div>}
         </div>
-        <div className="drawer-footer"><select value={asset.state} onChange={(event) => onPatch({ state: event.target.value as AssetState })}><option value="not_planned">not planned</option><option value="planned">planned</option><option value="ready">ready</option><option value="posted">posted</option></select><button className={`drawer-star ${asset.favorite ? "favorite-on" : ""}`} onClick={() => onPatch({ favorite: !asset.favorite })}>★</button>{selected && <a className="button button-primary" href={fileUrl(selected.url) ?? "#"} download>Download</a>}</div>
+        <div className="drawer-footer"><select value={selected.state} onChange={(event) => onPatch(selected, { state: event.target.value as AssetState })}><option value="not_planned">not planned</option><option value="planned">planned</option><option value="ready">ready</option><option value="posted">posted</option></select><button className={`drawer-star ${selected.favorite ? "favorite-on" : ""}`} onClick={() => onPatch(selected, { favorite: !selected.favorite })}>★</button>{selectedRender && <a className="button button-primary download-button" href={fileUrl(selectedRender.url) ?? "#"} download>Download</a>}</div>
       </aside>
     </div>
   );
@@ -257,22 +288,24 @@ function Library({ assets, projects, onPatch }: { assets: Asset[]; projects: Pro
   const [favorites, setFavorites] = useState(false);
   const [search, setSearch] = useState("");
   const [view, setView] = useState<ViewMode>("cards");
-  const [selected, setSelected] = useState<Asset | null>(null);
-  const filtered = useMemo(() => assets.filter((asset) => {
-    const text = `${asset.title} ${asset.hook_line}`.toLowerCase();
-    return (!project || asset.project_ids.includes(project))
-      && (!ratio || asset.renders.some((render) => render.ratio === ratio))
-      && (!score || asset.viral_score >= Number(score))
-      && (!state || asset.state === state)
-      && (!favorites || asset.favorite)
-      && (!search || text.includes(search.toLowerCase()));
-  }), [assets, project, ratio, score, state, favorites, search]);
+  const [selected, setSelected] = useState<ClipGroup | null>(null);
+  const groups = useMemo(() => groupAssets(assets), [assets]);
+  const filtered = useMemo(() => groups.filter((group) => {
+    const variants = group.variants;
+    return (!project || variants.some((asset) => asset.project_ids.includes(project)))
+      && (!ratio || variants.some((asset) => asset.renders.some((render) => render.ratio === ratio)))
+      && (!score || variants.some((asset) => asset.viral_score >= Number(score)))
+      && (!state || variants.some((asset) => asset.state === state))
+      && (!favorites || variants.some((asset) => asset.favorite))
+      && (!search || variants.some((asset) => `${asset.title} ${asset.hook_line}`.toLowerCase().includes(search.toLowerCase())));
+  }), [groups, project, ratio, score, state, favorites, search]);
+  const projectCount = new Set(groups.flatMap((group) => group.variants.flatMap((asset) => asset.project_ids))).size;
   return (
     <section className="page">
-      <header className="page-header"><div><div className="eyebrow">CONTENT LIBRARY</div><h1>Library</h1><p className="page-subtitle">{assets.length} clips across {projects.length} projects</p></div><div className="view-toggle"><button className={view === "cards" ? "view-active" : ""} onClick={() => setView("cards")}>▦ Cards</button><button className={view === "table" ? "view-active" : ""} onClick={() => setView("table")}>☷ Table</button></div></header>
+      <header className="page-header"><div><div className="eyebrow">CONTENT LIBRARY</div><h1>Library</h1><p className="page-subtitle">{groups.length} clips across {projectCount} projects</p></div><div className="view-toggle"><button className={view === "cards" ? "view-active" : ""} onClick={() => setView("cards")}>▦ Cards</button><button className={view === "table" ? "view-active" : ""} onClick={() => setView("table")}>☷ Table</button></div></header>
       <FilterBar projects={projects} project={project} setProject={setProject} ratio={ratio} setRatio={setRatio} score={score} setScore={setScore} state={state} setState={setState} favorites={favorites} setFavorites={setFavorites} search={search} setSearch={setSearch} />
-      {!filtered.length ? <div className="empty-state"><span className="empty-icon">✦</span><h2>No clips yet</h2><p>Create a job to generate clips.</p></div> : view === "cards" ? <div className="asset-grid">{filtered.map((asset) => <AssetCard key={asset.id} asset={asset} projects={projects} onOpen={() => setSelected(asset)} onFavorite={() => onPatch(asset, { favorite: !asset.favorite })} />)}</div> : <AssetTable assets={filtered} projects={projects} onOpen={setSelected} onFavorite={(asset) => onPatch(asset, { favorite: !asset.favorite })} onState={(asset, next) => onPatch(asset, { state: next })} />}
-      {selected && <AssetDrawer asset={selected} projects={projects} onClose={() => setSelected(null)} onPatch={(patch) => { onPatch(selected, patch); setSelected({ ...selected, ...patch }); }} />}
+      {!filtered.length ? <div className="empty-state"><span className="empty-icon">✦</span><h2>No clips yet</h2><p>Create a job to generate clips.</p></div> : view === "cards" ? <div className="asset-grid">{filtered.map((group) => <AssetCard key={group.key} group={group} projects={projects} onOpen={() => setSelected(group)} onFavorite={() => onPatch(group.primary, { favorite: !group.primary.favorite })} />)}</div> : <AssetTable groups={filtered} projects={projects} onOpen={setSelected} onFavorite={(asset) => onPatch(asset, { favorite: !asset.favorite })} onState={(asset, next) => onPatch(asset, { state: next })} />}
+      {selected && <AssetDrawer group={selected} projects={projects} onClose={() => setSelected(null)} onPatch={onPatch} />}
     </section>
   );
 }
