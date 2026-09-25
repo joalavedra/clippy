@@ -120,11 +120,7 @@ def catalog_results(conn, storage: Storage, job: dict, results: list[dict]) -> l
             thumb_path = manifest.get("thumbnail_path")
             if not thumb_path or not os.path.exists(thumb_path):
                 candidate = Path(source_path).with_name(f"thumbnail_{clip_id}.jpg")
-                thumb_path = (
-                    str(candidate)
-                    if candidate.exists()
-                    else _extract_thumbnail(source_path, str(candidate))
-                )
+                thumb_path = _extract_thumbnail(source_path, str(candidate))
             thumb_key = None
             if thumb_path and os.path.exists(thumb_path):
                 thumb_key = f"{job_id}/{slug}/thumbnail_{clip_id}.jpg"
