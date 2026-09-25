@@ -12,6 +12,11 @@ import time
 from yt_dlp import YoutubeDL
 from faster_whisper import WhisperModel
 
+from .ingest_errors import (
+    DownloadError,
+    classify_download_error,
+)
+
 
 # ==============================================================================
 # TAHAP 1: DOWNLOAD VIDEO
@@ -121,12 +126,23 @@ def _ydl_progress_hook(d: dict) -> None:
         print(flush=True)  # tutup baris bar untuk stream ini
 
 
+def _remove_partial_downloads(output_path: str) -> None:
+    """Remove files yt-dlp may leave behind after a failed attempt."""
+    for path in (output_path, f"{output_path}.part"):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
 def download_video(
     url: str,
     output_path: str,
     use_dlp_subs: bool = False,
     download_source_height: str | int = "max",
     source_platform: str = "youtube",
+    cookies_file: str | None = None,
+    retries: int = 2,
 ) -> None:
     """
     Download a video to *output_path* with configurable source height.
@@ -148,12 +164,19 @@ def download_video(
 
     # --- Google Drive: use gdown instead of yt-dlp ---
     if source_platform == "gdrive":
-        _download_gdrive(url, output_path)
+        try:
+            _download_gdrive(url, output_path)
+        except Exception as exc:
+            raise DownloadError(classify_download_error(exc), detail=str(exc)) from exc
         if not os.path.exists(output_path):
-            raise RuntimeError(
-                f"❌ Download dari Google Drive gagal — file tidak ditemukan di {output_path}"
+            raise DownloadError(
+                "unknown",
+                detail=(
+                    "❌ Download dari Google Drive gagal — file tidak "
+                    f"ditemukan di {output_path}"
+                ),
             )
-        print(f"      ✅ Video berhasil didownload dari Google Drive.", flush=True)
+        print("      ✅ Video berhasil didownload dari Google Drive.", flush=True)
         return
 
     # --- Build yt-dlp options per platform ---
@@ -179,6 +202,8 @@ def download_video(
             "merge_output_format": "mp4",
             "progress_hooks": [_ydl_progress_hook],
         }
+    if cookies_file:
+        ydl_opts["cookiefile"] = cookies_file
 
     # --- Subtitle download — only supported for YouTube ---
     if use_dlp_subs and uses_youtube_format:
@@ -200,7 +225,7 @@ def download_video(
                     ydl.download([url])
 
                 # Cek apakah json3 untuk bahasa ini benar-benar terdownload
-                if glob.glob(output_path.replace(".mp4", f".*.json3")):
+                if glob.glob(output_path.replace(".mp4", ".*.json3")):
                     print(f"      ✅ Subtitle '{lang}' ditemukan. Melanjutkan ke video...")
                     break
             except Exception as e:
@@ -208,24 +233,46 @@ def download_video(
     elif use_dlp_subs and not uses_youtube_format:
         print(f"      ℹ️ {platform_label} tidak menyediakan subtitle otomatis. Whisper akan digunakan.")
 
-    # Jalankan download video terpisah dari urusan subtitle
-    with YoutubeDL(ydl_opts) as ydl:
-        # Extra step to verify resolution before downloading
+    # Jalankan download video dengan retry dan rotasi klien YouTube.
+    attempts = max(1, 1 + retries)
+    clients = ["android,web", "web_safari,web", "tv,web"]
+    for attempt in range(attempts):
+        attempt_opts = ydl_opts.copy()
+        if uses_youtube_format:
+            attempt_opts["extractor_args"] = {
+                "youtube": [
+                    f"player_client={clients[attempt % len(clients)]}"
+                ]
+            }
         try:
-            info = ydl.extract_info(url, download=False)
-            best_h = info.get("height", "unknown")
-            v_codec = info.get("vcodec", "unknown")
-            print(f"      ✅ Mendownload: {best_h}p (Codec: {v_codec})", flush=True)
-        except Exception as e:
-            print(f"      ⚠️ Gagal mengecek info detail: {e}", flush=True)
-
-        ydl.download([url])
+            with YoutubeDL(attempt_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                best_h = info.get("height", "unknown")
+                v_codec = info.get("vcodec", "unknown")
+                print(
+                    f"      ✅ Mendownload: {best_h}p (Codec: {v_codec})",
+                    flush=True,
+                )
+                ydl.download([url])
+            break
+        except Exception as exc:
+            _remove_partial_downloads(output_path)
+            reason = classify_download_error(exc)
+            if reason in {"private_or_removed", "geo_blocked"}:
+                raise DownloadError(reason, detail=str(exc)) from exc
+            if attempt == attempts - 1:
+                raise DownloadError(reason, detail=str(exc)) from exc
+            time.sleep(2 * (attempt + 1))
 
     # --- Post-download verification ---
     if not os.path.exists(output_path):
-        raise RuntimeError(
-            f"❌ Download dari {platform_label} gagal — file video tidak ditemukan di {output_path}.\n"
-            "      Pastikan URL valid dan bisa diakses secara publik."
+        raise DownloadError(
+            "unknown",
+            detail=(
+                f"❌ Download dari {platform_label} gagal — file video tidak "
+                f"ditemukan di {output_path}.\n"
+                "      Pastikan URL valid dan bisa diakses secara publik."
+            ),
         )
 
 
