@@ -10,6 +10,7 @@ import cv2
 
 from .. import studio
 from . import assembler, loader
+from .timeline_view import build_cut_sheet
 
 LOGGER = logging.getLogger(__name__)
 
@@ -308,8 +309,6 @@ def render_clip_styled(
         cut_sheet_path = None
         if getattr(cfg, "story_cut_sheets", True):
             try:
-                from .timeline_view import build_cut_sheet
-
                 timeline_scenes = []
                 offset = 0.0
                 for section_name in ("hook", "highlight"):

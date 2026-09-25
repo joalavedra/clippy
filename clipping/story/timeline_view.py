@@ -149,7 +149,7 @@ def render_timeline(
 
         draw.text(
             (margin, 10),
-            f"{Path(video_path).name}  {start:.2f}s → {end:.2f}s",
+            f"{Path(video_path).name}  {start:.2f}s - {end:.2f}s",
             fill=(235, 235, 235),
             font=font,
         )
