@@ -133,9 +133,18 @@ def build_director_prompt(
     max_duration: float,
     num_clips: int,
     language: str = "English",
+    source_layouts: dict[str, str] | None = None,
 ) -> str:
+    source_layouts = source_layouts or {}
     sources_block = "\n\n".join(
-        f"=== SOURCE id=\"{sid}\" ===\n{text}" for sid, text in transcripts.items()
+        f'=== SOURCE id="{sid}" ==='
+        + (
+            "\nlayout: podcast (two speakers, split-screen render)"
+            if source_layouts.get(sid) == "podcast"
+            else ""
+        )
+        + f"\n{text}"
+        for sid, text in transcripts.items()
     )
     guidance = format_guidance(ratio, min_duration, max_duration)
     return f"""You are a short-form video editor and director. You will be given timestamped

@@ -55,6 +55,7 @@ def generate_recipe(
     cfg,
     project_name,
     response_path=None,
+    source_layouts=None,
 ) -> dict:
     """Ask Gemini for a Story recipe matching the director schema."""
     import google.genai as genai
@@ -67,6 +68,7 @@ def generate_recipe(
         min_duration=min_duration,
         max_duration=max_duration,
         num_clips=num_clips,
+        source_layouts=source_layouts,
     )
     client = genai.Client(
         api_key=cfg.api_key_gemini,
@@ -352,6 +354,10 @@ def run_director(cfg):
     )
     if not transcripts:
         raise RuntimeError("Director could not obtain any source transcripts.")
+    source_layouts = {
+        sid: source.get("layout", "single")
+        for sid, source in sources.items()
+    }
 
     format_specs = getattr(cfg, "formats", None) or [
         (cfg.pilihan_rasio, cfg.target_min, cfg.target_max)
@@ -390,6 +396,7 @@ def run_director(cfg):
             cfg=cfg,
             project_name=cfg.project_name,
             response_path=response_path,
+            source_layouts=source_layouts,
         )
         transcript_meta["__director_limits__"] = {
             "min_duration": min_duration,

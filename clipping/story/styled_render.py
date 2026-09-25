@@ -1,5 +1,6 @@
 """Styled Story scene rendering with face tracking and ASS captions."""
 
+import copy
 import os
 import shutil
 import subprocess
@@ -63,6 +64,7 @@ def render_scene_styled(
     video_encoder,
     out_ts: str,
     label: str,
+    layout: str = "single",
 ) -> str:
     """Render one Story scene with styled video and karaoke captions."""
     os.makedirs(os.path.dirname(os.path.abspath(out_ts)), exist_ok=True)
@@ -80,16 +82,33 @@ def render_scene_styled(
 
     try:
         if studio._is_vertical_ratio(ratio):
-            get_x = studio.buat_video_hybrid(
-                source_path,
-                silent_mp4,
-                start,
-                end,
-                ratio,
-                cfg,
-                None,
-                label=label,
-            )
+            if layout == "podcast":
+                cfg_podcast = copy.copy(cfg)
+                cfg_podcast.use_split_screen = True
+                cfg_podcast.split_trigger = "face"
+                cfg_podcast.use_dynamic_split = True
+                cfg_podcast.split_auto_zoom = True
+                get_x = studio.buat_video_split_screen(
+                    source_path,
+                    silent_mp4,
+                    start,
+                    end,
+                    ratio,
+                    None,
+                    cfg_podcast,
+                    label=label,
+                )
+            else:
+                get_x = studio.buat_video_hybrid(
+                    source_path,
+                    silent_mp4,
+                    start,
+                    end,
+                    ratio,
+                    cfg,
+                    None,
+                    label=label,
+                )
         else:
             _trim_video_only(source_path, start, end, trimmed_mp4)
             assembler._normalize_scene_segment(
@@ -229,6 +248,7 @@ def render_clip_styled(
                     scene, source_registry, cache_dir
                 )
                 transcript = transcripts.get(source_id, {})
+                source_layout = source_registry[source_id].get("layout", "single")
                 scene_ts = os.path.join(
                     temp_dir, f"{section_name}_{idx}.ts"
                 )
@@ -242,6 +262,7 @@ def render_clip_styled(
                     video_encoder=video_encoder,
                     out_ts=scene_ts,
                     label=f"Clip {cid} {section_name} {idx} {source_id}",
+                    layout=source_layout,
                 )
                 destination.append(scene_ts)
 
