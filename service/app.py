@@ -59,8 +59,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Clippy Service", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
+        allow_origins=settings.cors_origins,
+        allow_credentials="*" not in settings.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )

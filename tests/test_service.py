@@ -80,6 +80,28 @@ def test_create_project_and_job_api(tmp_path):
         assert job_response.status_code == 200
         assert job_response.json()["status"] == "queued"
         assert len(client.get("/api/jobs").json()) == 1
+        duplicate_formats = client.post(
+            "/api/jobs",
+            json={
+                "project_ids": [project["id"]],
+                "brief": "Duplicate formats",
+                "formats": [
+                    {"ratio": "9:16", "min": 8, "max": 12},
+                    {"ratio": "9:16", "min": 20, "max": 30},
+                ],
+            },
+        )
+        assert duplicate_formats.status_code == 422
+        clean_style = client.post(
+            "/api/jobs",
+            json={
+                "project_ids": [project["id"]],
+                "brief": "Unsupported style",
+                "formats": [{"ratio": "9:16", "min": 8, "max": 12}],
+                "options": {"story_style": "clean"},
+            },
+        )
+        assert clean_style.status_code == 422
         missing = client.post(
             "/api/jobs",
             json={
@@ -101,7 +123,7 @@ def test_catalog_results_creates_assets_and_renders(tmp_path):
         formats=[{"ratio": "9:16", "min": 8, "max": 12}],
         clips=1,
         options={},
-        project_ids=["p1"],
+        project_ids=["p1", "p2"],
     )
     storage = LocalStorage(settings.storage_root)
     catalog_results(conn, storage, job, _fake_results(tmp_path))
@@ -109,6 +131,7 @@ def test_catalog_results_creates_assets_and_renders(tmp_path):
     assets = db.list_assets(settings.db_path)
     assert len(assets) == 2
     assert len(assets[0]["renders"]) == 1
+    assert assets[0]["project_ids"] == ["p1"]
     for asset in assets:
         render = asset["renders"][0]
         assert os.path.isfile(storage.path(render["file_key"]))
@@ -216,3 +239,55 @@ def test_worker_success_and_failure(tmp_path, monkeypatch):
     failed = db.get_job(settings.db_path, failed_job["id"])
     assert failed["status"] == "failed"
     assert failed["error"] == "boom"
+
+
+def test_worker_progress_is_monotonic_for_two_formats(tmp_path):
+    settings = _settings(tmp_path)
+    job = db.create_job(
+        settings.db_path,
+        brief="brief",
+        formats=[
+            {"ratio": "9:16", "min": 8, "max": 12},
+            {"ratio": "16:9", "min": 20, "max": 30},
+        ],
+        clips=1,
+        options={},
+        project_ids=[],
+    )
+    worker = Worker(settings)
+    callback = worker._stage_callback(job)
+    percentages = []
+    for stage, ratio in (
+        ("transcribe", ""),
+        ("direct", "9:16"),
+        ("render", "9:16"),
+        ("direct", "16:9"),
+        ("render", "16:9"),
+    ):
+        callback(stage, ratio)
+        percentages.append(db.get_job(settings.db_path, job["id"])["percent"])
+    assert percentages == [10, 10, 30, 50, 70]
+    assert percentages == sorted(percentages)
+
+
+def test_requeue_running_jobs(tmp_path):
+    settings = _settings(tmp_path)
+    job = db.create_job(
+        settings.db_path,
+        brief="orphaned",
+        formats=[{"ratio": "9:16", "min": 8, "max": 12}],
+        clips=1,
+        options={},
+        project_ids=[],
+        status="running",
+        stage="render:9:16",
+        percent=70,
+    )
+    assert db.requeue_running(settings.db_path) == [job["id"]]
+    requeued = db.get_job(settings.db_path, job["id"])
+    assert requeued["status"] == "queued"
+    assert requeued["stage"] == "queued"
+    assert requeued["percent"] == 0
+    assert db.list_events(settings.db_path, job["id"])[0]["message"] == (
+        "requeued after restart"
+    )

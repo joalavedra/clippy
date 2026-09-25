@@ -48,7 +48,7 @@ class JobOptions(BaseModel):
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
-    story_style: Literal["clean", "styled"] = "styled"
+    story_style: Literal["styled"] = "styled"
     gemini_timeout: int = Field(default=180, gt=0)
     project_name: str | None = None
 
@@ -59,6 +59,13 @@ class JobCreate(BaseModel):
     formats: list[FormatSpec] = Field(min_length=1)
     clips: int = Field(default=2, ge=1, le=10)
     options: JobOptions = Field(default_factory=JobOptions)
+
+    @model_validator(mode="after")
+    def unique_format_ratios(self):
+        ratios = [item.ratio for item in self.formats]
+        if len(ratios) != len(set(ratios)):
+            raise ValueError("formats must not contain duplicate ratios")
+        return self
 
 
 class Job(BaseModel):

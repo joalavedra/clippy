@@ -278,6 +278,30 @@ def claim_next_queued(conn: sqlite3.Connection) -> dict | None:
     return claimed
 
 
+def requeue_running(db_path: str) -> list[str]:
+    """Requeue jobs left running by a previous worker process."""
+    with _opened(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id FROM jobs WHERE status = 'running' ORDER BY created_at, id"
+        ).fetchall()
+        if not rows:
+            return []
+        now = _now()
+        conn.execute(
+            "UPDATE jobs SET status='queued', stage='queued', percent=0, "
+            "updated_at=? WHERE status='running'",
+            (now,),
+        )
+        for row in rows:
+            conn.execute(
+                "INSERT INTO job_events (id, job_id, ts, stage, message) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (_id(), row["id"], now, "queued", "requeued after restart"),
+            )
+        conn.commit()
+    return [row["id"] for row in rows]
+
+
 def update_job(db_path: str, job_id: str, **fields: Any) -> dict | None:
     allowed = {
         "status",

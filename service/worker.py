@@ -45,7 +45,6 @@ def _job_value(job: dict, key: str, default=None):
 def catalog_results(conn, storage: Storage, job: dict, results: list[dict]) -> list[dict]:
     """Copy render outputs and create asset/render rows for Director results."""
     job_id = job["id"]
-    project_ids = _job_value(job, "project_ids", [])
     cataloged = []
     for result in results:
         ratio = result["format"]
@@ -82,6 +81,9 @@ def catalog_results(conn, storage: Storage, job: dict, results: list[dict]) -> l
             scenes = (
                 clip.get("hook", {}).get("scenes", [])
                 + clip.get("highlight", {}).get("scenes", [])
+            )
+            project_ids = sorted(
+                {scene["source_id"] for scene in scenes if scene.get("source_id")}
             )
             duration = sum(
                 float(scene["end"]) - float(scene["start"]) for scene in scenes
@@ -136,18 +138,23 @@ class Worker(threading.Thread):
     def _stage_callback(self, job: dict):
         formats = _job_value(job, "formats", [])
         ratios = [item["ratio"] for item in formats]
+        last_percent = 0
 
         def on_stage(stage: str, ratio: str):
+            nonlocal last_percent
             if stage == "transcribe":
                 percent = 10
                 label = "transcribe"
             else:
                 index = ratios.index(ratio) if ratio in ratios else 0
+                count = max(1, len(ratios))
                 if stage == "direct":
-                    percent = 30 + int(30 * index / max(1, len(ratios)))
+                    percent = int(10 + 80 * (2 * index) / (2 * count))
                 else:
-                    percent = 60 + int(30 * index / max(1, len(ratios)))
+                    percent = int(10 + 80 * (2 * index + 1) / (2 * count))
                 label = f"{stage}:{ratio}"
+            percent = max(last_percent, percent)
+            last_percent = percent
             db.update_job(
                 self.settings.db_path,
                 job["id"],
@@ -271,6 +278,7 @@ class Worker(threading.Thread):
             db.add_event(self.settings.db_path, job_id, "failed", error)
 
     def run(self) -> None:
+        db.requeue_running(self.settings.db_path)
         while not self._stop_event.is_set():
             conn = db.connect(self.settings.db_path)
             try:

@@ -21,6 +21,17 @@ class Settings:
     worker_enabled: bool = field(
         default_factory=lambda: _env_bool("CLIPPY_WORKER_ENABLED", True)
     )
+    cors_origins: list[str] = field(
+        default_factory=lambda: [
+            origin.strip()
+            for origin in os.environ.get(
+                "CLIPPY_CORS_ORIGINS",
+                "http://localhost:5173,http://127.0.0.1:5173,"
+                "http://localhost:8100,http://127.0.0.1:8100",
+            ).split(",")
+            if origin.strip()
+        ]
+    )
     db_path: str = field(init=False)
     storage_root: str = field(init=False)
     work_dir: str = field(init=False)
