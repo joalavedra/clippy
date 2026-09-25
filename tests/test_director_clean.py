@@ -98,3 +98,22 @@ def test_apply_clean_speech_expands_story_recipe():
     assert len(scenes) == 2
     assert scenes[0]["end"] == pytest.approx(1.48)
     assert scenes[1]["start"] == pytest.approx(1.85)
+
+
+def test_apply_clean_speech_keeps_scenes_without_timestamps():
+    scene = {"source_id": "source", "start": None, "end": None}
+    recipe = {
+        "clips": [
+            {
+                "hook": {"scenes": [scene]},
+                "highlight": {"scenes": []},
+            }
+        ]
+    }
+
+    apply_clean_speech(
+        recipe,
+        {"source": {"segmen": [{"words": [_word("hello", 0, 1)]}]}},
+    )
+
+    assert recipe["clips"][0]["hook"]["scenes"] == [scene]

@@ -327,6 +327,9 @@ def apply_clean_speech(recipe: dict, transcripts_meta: dict) -> dict:
             section = clip.get(section_name, {})
             expanded = []
             for scene in section.get("scenes", []):
+                if scene.get("start") is None or scene.get("end") is None:
+                    expanded.append(scene)
+                    continue
                 metadata = transcripts_meta.get(scene.get("source_id"))
                 if metadata is None:
                     expanded.append(scene)
