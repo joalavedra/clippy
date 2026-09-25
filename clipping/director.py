@@ -20,6 +20,7 @@ def _load_transcript_bundle(
 ) -> tuple[dict[str, dict], dict[str, str]]:
     """Cache sources, transcribe them, and attach their media paths."""
     os.makedirs(cache_dir, exist_ok=True)
+    cfg.strict_sources = getattr(cfg, "strict_sources", True)
     cache_dir, cached_paths = story_runner._prepare_source_cache(
         sources, cfg, cache_dir
     )
