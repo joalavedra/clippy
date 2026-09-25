@@ -284,6 +284,8 @@ class Worker(threading.Thread):
                 "--project-name",
                 project_name,
             ]
+            if options.get("clean_speech", False):
+                argv.append("--clean-speech")
             cfg = build_config(argv)
             cfg.story_cache_dir = self.settings.cache_dir
             results = director.run_director(

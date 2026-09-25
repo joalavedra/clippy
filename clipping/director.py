@@ -2,12 +2,15 @@
 
 import json
 import os
+import re
 import subprocess
 import time
 
 from . import engine, story_runner
 from .director_prompt import RECIPE_SCHEMA, build_director_prompt
 from .story import loader, source_manager
+
+FILLERS = {"um", "uh", "umm", "uhh", "erm", "hmm", "mm", "ah", "er"}
 
 
 def _load_transcript_bundle(
@@ -230,6 +233,93 @@ def snap_scene_to_words(scene: dict, segmen: list[dict]) -> bool:
     return new_start != old_start or new_end != old_end
 
 
+def clean_scene_speech(
+    scene: dict,
+    segmen: list[dict],
+    max_gap: float = 0.6,
+    fillers: set[str] = FILLERS,
+) -> list[dict]:
+    """Split a scene around dead air and filler words without dropping content."""
+    scene_start = float(scene["start"])
+    scene_end = float(scene["end"])
+    words = []
+    for segment in segmen or []:
+        for word in segment.get("words", []):
+            try:
+                start = float(word["start"])
+                end = float(word["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if end <= scene_start or start >= scene_end:
+                continue
+            token = re.sub(r"^[^\w]+|[^\w]+$", "", str(word.get("word", ""))).lower()
+            words.append(
+                (
+                    max(scene_start, start),
+                    min(scene_end, end),
+                    token in fillers,
+                )
+            )
+    words.sort()
+    if not any(not is_filler for _, _, is_filler in words):
+        return [dict(scene)]
+
+    groups: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+    for start, end, is_filler in words:
+        if is_filler:
+            if current:
+                groups.append(current)
+                current = []
+            continue
+        if current and start - current[-1][1] > max_gap:
+            groups.append(current)
+            current = []
+        current.append((start, end))
+    if current:
+        groups.append(current)
+
+    if not groups:
+        return [dict(scene)]
+
+    cleaned = []
+    for group in groups:
+        item = dict(scene)
+        item["start"] = max(scene_start, group[0][0] - 0.05)
+        item["end"] = min(scene_end, group[-1][1] + 0.08)
+        cleaned.append(item)
+
+    while len(cleaned) > 1:
+        short_index = next(
+            (
+                index
+                for index, item in enumerate(cleaned)
+                if item["end"] - item["start"] < 1.0
+            ),
+            None,
+        )
+        if short_index is None:
+            break
+        if short_index == 0:
+            neighbor_index = 1
+        elif short_index == len(cleaned) - 1:
+            neighbor_index = short_index - 1
+        else:
+            previous_gap = cleaned[short_index]["start"] - cleaned[short_index - 1]["end"]
+            next_gap = cleaned[short_index + 1]["start"] - cleaned[short_index]["end"]
+            neighbor_index = short_index - 1 if previous_gap <= next_gap else short_index + 1
+        merged = dict(cleaned[neighbor_index])
+        merged["start"] = min(
+            cleaned[short_index]["start"], cleaned[neighbor_index]["start"]
+        )
+        merged["end"] = max(
+            cleaned[short_index]["end"], cleaned[neighbor_index]["end"]
+        )
+        cleaned[neighbor_index] = merged
+        cleaned.pop(short_index)
+    return cleaned
+
+
 def _clamp_scene(scene: dict, transcripts_meta: dict, section: str) -> bool:
     source_id = scene.get("source_id")
     if source_id not in transcripts_meta:
@@ -284,7 +374,7 @@ def _clamp_scene(scene: dict, transcripts_meta: dict, section: str) -> bool:
     return True
 
 
-def validate_recipe(recipe, transcripts_meta):
+def validate_recipe(recipe, transcripts_meta, cfg=None):
     """Clamp scenes, remove unusable spans, and filter invalid clip lengths."""
     defaults = recipe.setdefault("default_settings", {})
     limits = transcripts_meta.get("__director_limits__", {})
@@ -301,16 +391,28 @@ def validate_recipe(recipe, transcripts_meta):
     for clip in recipe.get("clips", []):
         hook = clip.get("hook", {})
         highlight = clip.get("highlight", {})
-        hook_scenes = [
-            scene
-            for scene in hook.get("scenes", [])
-            if _clamp_scene(scene, transcripts_meta, "hook")
-        ]
-        highlight_scenes = [
-            scene
-            for scene in highlight.get("scenes", [])
-            if _clamp_scene(scene, transcripts_meta, "highlight")
-        ]
+        hook_scenes = []
+        for scene in hook.get("scenes", []):
+            if _clamp_scene(scene, transcripts_meta, "hook"):
+                hook_scenes.extend(
+                    clean_scene_speech(
+                        scene,
+                        transcripts_meta[scene["source_id"]].get("segmen", []),
+                    )
+                    if getattr(cfg, "clean_speech", False)
+                    else [scene]
+                )
+        highlight_scenes = []
+        for scene in highlight.get("scenes", []):
+            if _clamp_scene(scene, transcripts_meta, "highlight"):
+                highlight_scenes.extend(
+                    clean_scene_speech(
+                        scene,
+                        transcripts_meta[scene["source_id"]].get("segmen", []),
+                    )
+                    if getattr(cfg, "clean_speech", False)
+                    else [scene]
+                )
         hook["scenes"] = hook_scenes
         highlight["scenes"] = highlight_scenes
 
@@ -409,7 +511,7 @@ def run_director(cfg, on_stage=None):
             "min_duration": min_duration,
             "max_duration": max_duration,
         }
-        validate_recipe(recipe, transcript_meta)
+        validate_recipe(recipe, transcript_meta, cfg=cfg)
         print(
             f"⏱️ Gemini/director stage ({ratio}): "
             f"{time.perf_counter() - gemini_started:.2f}s"

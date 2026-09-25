@@ -1,6 +1,7 @@
 """Styled Story scene rendering with face tracking and ASS captions."""
 
 import copy
+import logging
 import os
 import shutil
 import subprocess
@@ -9,6 +10,9 @@ import cv2
 
 from .. import studio
 from . import assembler, loader
+from .timeline_view import build_cut_sheet
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _source_dimensions(source_path: str) -> tuple[int, int]:
@@ -152,6 +156,14 @@ def render_scene_styled(
             "-map",
             "1:a:0",
         ]
+        duration = max(0.0, end - start)
+        cmd += [
+            "-af",
+            (
+                "afade=t=in:st=0:d=0.03,"
+                f"afade=t=out:st={duration - 0.03:.3f}:d=0.03"
+            ),
+        ]
         if has_subtitles:
             ass_filter = studio.escape_ffmpeg_filter_value(os.path.abspath(ass_path))
             fonts_dir = studio.escape_ffmpeg_filter_value(
@@ -294,10 +306,31 @@ def render_clip_styled(
         _concat_ts_to_mp4(hook_parts_for_final, hook_path)
         _concat_ts_to_mp4(highlight_parts, highlight_path)
         _concat_ts_to_mp4(hook_parts_for_final + highlight_parts, final_path)
+        cut_sheet_path = None
+        if getattr(cfg, "story_cut_sheets", True):
+            try:
+                timeline_scenes = []
+                offset = 0.0
+                for section_name in ("hook", "highlight"):
+                    for scene in clip_config.get(section_name, {}).get("scenes", []):
+                        scene_for_timeline = dict(scene)
+                        scene_for_timeline["offset"] = offset
+                        timeline_scenes.append(scene_for_timeline)
+                        offset += float(scene["end"]) - float(scene["start"])
+                cut_sheet_path = os.path.join(clip_dir, f"clip_{cid}_cuts.png")
+                build_cut_sheet(
+                    final_path,
+                    timeline_scenes,
+                    transcripts,
+                    cut_sheet_path,
+                )
+            except Exception as exc:
+                LOGGER.warning("Could not build cut sheet for clip %s: %s", cid, exc)
         return {
             "hook_path": hook_path,
             "highlight_path": highlight_path,
             "final_path": final_path,
+            "cut_sheet_path": cut_sheet_path,
         }
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

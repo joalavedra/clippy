@@ -251,6 +251,7 @@ def run_story_pipeline(cfg) -> list[dict]:
             hook_path = rendered["hook_path"]
             highlight_path = rendered["highlight_path"]
             final_path = rendered["final_path"]
+            cut_sheet_path = rendered.get("cut_sheet_path")
         else:
             hook_path = assembler.assemble_hook(
                 clip_config=clip_config,
@@ -267,6 +268,7 @@ def run_story_pipeline(cfg) -> list[dict]:
                 ratio=ratio,
             )
             final_path = None
+            cut_sheet_path = None
 
         entry = {
             "clip_id": cid,
@@ -274,6 +276,7 @@ def run_story_pipeline(cfg) -> list[dict]:
             "hook_path": hook_path,
             "highlight_path": highlight_path,
             "final_path": final_path,
+            "cut_sheet_path": cut_sheet_path,
             "status": "ok" if (hook_path and highlight_path) else "partial",
             "metadata": clip_config.get("metadata", {}),
         }
