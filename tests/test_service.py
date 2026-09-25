@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -124,6 +125,43 @@ def test_create_project_and_job_api(tmp_path):
             },
         )
         assert missing.status_code == 404
+
+
+def test_search_api_requires_auth_and_reindexes_cache(tmp_path):
+    settings = _settings(tmp_path)
+    project = db.create_project(
+        settings.db_path,
+        id="search-project",
+        name="Search Project",
+        platform="local",
+    )
+    transcript = {
+        "source_id": project["id"],
+        "segmen": [
+            {
+                "start": 0,
+                "end": 4,
+                "words": [
+                    {"word": "human", "start": 0, "end": 1},
+                    {"word": "voice", "start": 1, "end": 2},
+                ],
+            }
+        ],
+    }
+    Path(settings.cache_dir, f"{project['id']}_transcript.json").write_text(
+        json.dumps(transcript),
+        encoding="utf-8",
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        assert client.get("/api/search?q=voice").status_code == 401
+        client.headers.update({"X-API-Key": "test"})
+        assert client.get("/api/search?q=voice").status_code == 200
+        response = client.post("/api/search/reindex")
+        assert response.status_code == 200
+        assert response.json()["indexed"][project["id"]] == 1
+        result = client.get("/api/search?q=human").json()
+        assert result["results"][0]["project_name"] == "Search Project"
 
 
 def test_catalog_results_creates_assets_and_renders(tmp_path):

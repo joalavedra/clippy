@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import db, search
 from .media_tokens import sign_media_token, verify_media_token
 from .models import (
     Asset,
@@ -244,6 +244,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
         return _asset_response(asset, storage, settings)
+
+    @api_router.get("/search")
+    def search_footage(
+        q: str = Query(min_length=1),
+        project_id: str | None = None,
+        limit: int = Query(default=20, ge=1),
+    ):
+        return search.search(
+            settings.db_path,
+            q,
+            project_id=project_id,
+            limit=min(limit, 50),
+            embedder=search.make_embedder(settings),
+        )
+
+    @api_router.post("/search/reindex")
+    def reindex_search():
+        return search.reindex_all(
+            settings.db_path,
+            settings.cache_dir,
+            embedder=search.make_embedder(settings),
+        )
 
     app.include_router(api_router)
 

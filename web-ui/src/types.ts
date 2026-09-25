@@ -95,3 +95,24 @@ export interface Health {
   queued: number;
   running: number;
 }
+
+export interface SearchResult {
+  window_id: string;
+  project_id: string;
+  project_name: string;
+  start: number;
+  end: number;
+  text: string;
+  highlight: string;
+  score: number;
+  lexical: number;
+  semantic: number;
+}
+
+export interface SearchResponse {
+  query: string;
+  mode: "hybrid" | "lexical";
+  took_ms: number;
+  indexed_windows: number;
+  results: SearchResult[];
+}

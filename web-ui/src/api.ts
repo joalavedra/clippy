@@ -1,3 +1,5 @@
+import type { SearchResponse } from "./types";
+
 export class ApiError extends Error {
   status: number;
   detail: string;
@@ -37,4 +39,18 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fileUrl(url: string | null | undefined): string | null {
   return url || null;
+}
+
+export function searchFootage(
+  query: string,
+  projectId?: string,
+  limit = 20,
+): Promise<SearchResponse> {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  if (projectId) params.set("project_id", projectId);
+  return api<SearchResponse>(`/api/search?${params.toString()}`);
+}
+
+export function reindexSearch(): Promise<{ indexed: Record<string, number> }> {
+  return api("/api/search/reindex", { method: "POST" });
 }

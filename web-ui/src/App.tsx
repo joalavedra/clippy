@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { api, fileUrl, ApiError } from "./api";
+import { api, fileUrl, ApiError, reindexSearch, searchFootage } from "./api";
 import type {
   Asset,
   AssetState,
@@ -12,6 +12,8 @@ import type {
   Project,
   Ratio,
   Render,
+  SearchResponse,
+  SearchResult,
 } from "./types";
 import {
   Button,
@@ -22,7 +24,7 @@ import {
   StateChip,
 } from "./components/primitives";
 
-type Screen = "library" | "jobs" | "settings";
+type Screen = "library" | "search" | "jobs" | "settings";
 type ViewMode = "cards" | "table";
 
 const ratios: Ratio[] = ["9:16", "16:9", "1:1"];
@@ -61,6 +63,7 @@ function AppShell({
   }, [assets]);
   const nav = [
     { id: "library" as const, label: "Library", icon: "▦" },
+    { id: "search" as const, label: "Search", icon: "⌕" },
     { id: "jobs" as const, label: "Jobs", icon: "↗" },
     { id: "settings" as const, label: "Settings", icon: "⚙" },
   ];
@@ -79,7 +82,7 @@ function AppShell({
               <span className="nav-icon">{item.icon}</span>{item.label}
             </button>
           ))}
-          {["Search", "Calendar", "Favorites", "Channels"].map((label) => (
+          {["Calendar", "Favorites", "Channels"].map((label) => (
             <button className="nav-item nav-disabled" key={label} disabled>
               <span className="nav-icon">·</span>{label}<Chip className="soon-chip">soon</Chip>
             </button>
@@ -371,6 +374,106 @@ function Jobs({ jobs, projects, reload }: { jobs: Job[]; projects: Project[]; re
   return <section className="page"><header className="page-header"><div><div className="eyebrow">PIPELINE</div><h1>Jobs</h1><p className="page-subtitle">Track your director runs and generated assets.</p></div><Button variant="primary" onClick={() => setShowNew(true)}>+ New job</Button></header><div className="job-list">{jobs.length ? jobs.map((job) => <article className="job-row" key={job.id}><div className="job-main" onClick={() => toggleEvents(job)}><div className="job-status-line"><span className={`job-status job-${job.status}`}>{job.status}</span><span className="job-stage">{job.stage}</span><span className="job-date">{formatDate(job.created_at)}</span></div><h3>{job.brief}</h3><div className="job-formats">{job.formats.map((format) => <RatioBadge ratio={`${format.ratio} · ${format.min}-${format.max}s`} key={format.ratio} />)}<span>{job.clips} clips</span></div></div><div className="job-progress"><div className="progress-label"><span>{job.status === "failed" ? job.error : job.stage}</span><strong>{Math.round(job.percent)}%</strong></div><div className="progress-track"><span style={{ width: `${job.percent}%` }} /></div></div>{expanded === job.id && <div className="job-events">{(events[job.id] ?? []).map((event) => <div className="event-row" key={event.id}><span>{formatDate(event.ts)}</span><strong>{event.stage}</strong><span>{event.message || "updated"}</span></div>)}</div>}</article>) : <div className="empty-state compact"><span className="empty-icon">↗</span><h2>No jobs yet</h2><p>Start a new director run to populate your library.</p></div>}</div><AddProjectForm onCreated={reload} />{showNew && <NewJobForm projects={projects} onClose={() => setShowNew(false)} onCreated={reload} />}</section>;
 }
 
+function formatSearchTime(value: number) {
+  const seconds = Math.max(0, Math.floor(value));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function HighlightedText({ value }: { value: string }) {
+  return (
+    <>
+      {value.split(/(\[[^\]]*\])/g).map((part, index) =>
+        part.startsWith("[") && part.endsWith("]")
+          ? <mark key={index}>{part.slice(1, -1)}</mark>
+          : <span key={index}>{part}</span>
+      )}
+    </>
+  );
+}
+
+function SearchResultRow({ result }: { result: SearchResult }) {
+  const score = Math.round(Math.max(0, Math.min(1, result.score)) * 100);
+  return (
+    <article className="search-result">
+      <div className="search-result-head">
+        <div>
+          <strong>{result.project_name}</strong>
+          <span className="search-time">{formatSearchTime(result.start)}–{formatSearchTime(result.end)}</span>
+        </div>
+        <span className="search-score">{score}%</span>
+      </div>
+      <div className="search-score-track"><span style={{ width: `${score}%` }} /></div>
+      <p className="search-result-text"><HighlightedText value={result.highlight || result.text} /></p>
+    </article>
+  );
+}
+
+function SearchFootage({ projects }: { projects: Project[] }) {
+  const [query, setQuery] = useState("");
+  const [project, setProject] = useState("");
+  const [response, setResponse] = useState<SearchResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [error, setError] = useState("");
+
+  const runSearch = useCallback(async (value: string, projectId: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setResponse(null);
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      setResponse(await searchFootage(trimmed, projectId || undefined));
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.detail : "Unable to search footage");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void runSearch(query, project), 300);
+    return () => window.clearTimeout(timer);
+  }, [query, project, runSearch]);
+
+  const reindex = async () => {
+    setReindexing(true);
+    setError("");
+    try {
+      await reindexSearch();
+      await runSearch(query, project);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.detail : "Unable to reindex footage");
+    } finally {
+      setReindexing(false);
+    }
+  };
+
+  return (
+    <section className="page">
+      <header className="page-header">
+        <div><div className="eyebrow">TRANSCRIPT SEARCH</div><h1>Search footage</h1><p className="page-subtitle">Find the moment you need across every project's transcript.</p></div>
+        <button className="button button-secondary" onClick={() => void reindex()} disabled={reindexing}>{reindexing ? "Indexing…" : "Reindex"}</button>
+      </header>
+      <div className="search-hero">
+        <span>⌕</span>
+        <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search what's said across your footage" />
+        <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Project">
+          <option value="">All projects</option>
+          {projects.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+        </select>
+      </div>
+      {response && <div className="search-chips"><Chip>{response.results.length} results</Chip><Chip>{response.mode}</Chip><Chip>{response.took_ms} ms</Chip><Chip>{response.indexed_windows} indexed</Chip></div>}
+      {error && <div className="form-error">{error}</div>}
+      {loading && <div className="search-loading">Searching transcripts…</div>}
+      {!loading && (!response || !response.results.length) && <div className="empty-state"><span className="empty-icon">⌕</span><h2>Type to search what's said across your footage.</h2><button className="button button-secondary" onClick={() => void reindex()} disabled={reindexing}>{reindexing ? "Indexing…" : "Reindex"}</button></div>}
+      {!loading && response && response.results.length > 0 && <div className="search-results">{response.results.map((result) => <SearchResultRow result={result} key={result.window_id} />)}</div>}
+    </section>
+  );
+}
+
 function SettingsPage({ health, refreshHealth }: { health: Health | null; refreshHealth: () => void }) {
   const [key, setKey] = useState(localStorage.getItem("clippy_api_key") ?? "");
   const [saved, setSaved] = useState(false);
@@ -400,5 +503,5 @@ export default function App() {
   const patchAsset = async (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => {
     try { const updated = await api<Asset>(`/api/assets/${asset.id}`, { method: "PATCH", body: JSON.stringify(patch) }); setAssets((current) => current.map((item) => item.id === updated.id ? updated : item)); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to update asset"); }
   };
-  return <AppShell screen={screen} setScreen={setScreen} projects={projects} assets={assets}>{error && <div className="global-error">{error}<button onClick={() => setError("")}>×</button></div>}{screen === "library" && <Library assets={assets} projects={projects} onPatch={patchAsset} reloadAssets={refreshAssets} />}{screen === "jobs" && <Jobs jobs={jobs} projects={projects} reload={reload} />}{screen === "settings" && <SettingsPage health={health} refreshHealth={loadHealth} />}</AppShell>;
+  return <AppShell screen={screen} setScreen={setScreen} projects={projects} assets={assets}>{error && <div className="global-error">{error}<button onClick={() => setError("")}>×</button></div>}{screen === "library" && <Library assets={assets} projects={projects} onPatch={patchAsset} reloadAssets={refreshAssets} />}{screen === "search" && <SearchFootage projects={projects} />}{screen === "jobs" && <Jobs jobs={jobs} projects={projects} reload={reload} />}{screen === "settings" && <SettingsPage health={health} refreshHealth={loadHealth} />}</AppShell>;
 }

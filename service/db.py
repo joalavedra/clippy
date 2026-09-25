@@ -94,6 +94,26 @@ def init_schema(conn: sqlite3.Connection) -> None:
             ON job_events(job_id, ts);
         CREATE INDEX IF NOT EXISTS idx_assets_job
             ON assets(job_id);
+        CREATE TABLE IF NOT EXISTS search_windows (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            win_index INTEGER NOT NULL,
+            start REAL NOT NULL,
+            end REAL NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS search_fts
+            USING fts5(
+                text,
+                window_id UNINDEXED,
+                project_id UNINDEXED,
+                tokenize='porter unicode61'
+            );
+        CREATE TABLE IF NOT EXISTS search_embeddings (
+            window_id TEXT PRIMARY KEY,
+            dim INTEGER NOT NULL,
+            vector BLOB NOT NULL
+        );
         """
     )
     conn.commit()
