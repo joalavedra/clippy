@@ -1,6 +1,6 @@
 import pytest
 
-from clipping.director import clean_scene_speech
+from clipping.director import apply_clean_speech, clean_scene_speech
 from clipping.story.timeline_view import map_words_to_output
 
 
@@ -63,3 +63,57 @@ def test_map_words_to_output():
     assert mapped[0]["end"] == pytest.approx(0.7)
     assert mapped[1]["start"] == pytest.approx(2.5)
     assert mapped[1]["end"] == pytest.approx(3.1)
+
+
+def test_apply_clean_speech_expands_story_recipe():
+    recipe = {
+        "clips": [
+            {
+                "hook": {
+                    "scenes": [
+                        {"source_id": "source", "start": 0, "end": 5}
+                    ]
+                },
+                "highlight": {"scenes": []},
+            }
+        ]
+    }
+    transcripts = {
+        "source": {
+            "segmen": [
+                {
+                    "words": [
+                        _word("hello", 0.2, 1.4),
+                        _word("um", 1.5, 1.8),
+                        _word("world", 1.9, 3.2),
+                    ]
+                }
+            ]
+        }
+    }
+
+    apply_clean_speech(recipe, transcripts)
+
+    scenes = recipe["clips"][0]["hook"]["scenes"]
+    assert len(scenes) == 2
+    assert scenes[0]["end"] == pytest.approx(1.48)
+    assert scenes[1]["start"] == pytest.approx(1.85)
+
+
+def test_apply_clean_speech_keeps_scenes_without_timestamps():
+    scene = {"source_id": "source", "start": None, "end": None}
+    recipe = {
+        "clips": [
+            {
+                "hook": {"scenes": [scene]},
+                "highlight": {"scenes": []},
+            }
+        ]
+    }
+
+    apply_clean_speech(
+        recipe,
+        {"source": {"segmen": [{"words": [_word("hello", 0, 1)]}]}},
+    )
+
+    assert recipe["clips"][0]["hook"]["scenes"] == [scene]
