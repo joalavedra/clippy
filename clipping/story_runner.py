@@ -47,7 +47,7 @@ def _transcribe_sources(
         from . import engine
     except ImportError as e:
         print(f"   ⚠️ Whisper tidak tersedia ({e}). Skip transkripsi.")
-        print(f"   💡 Install faster-whisper untuk mengaktifkan transkripsi.")
+        print("   💡 Install faster-whisper untuk mengaktifkan transkripsi.")
         return {}
 
     whisper_model = getattr(cfg, "whisper_model", "large-v3")
@@ -111,7 +111,10 @@ def _prepare_source_cache(
     cache_dir: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Download or resolve Story sources and save their status."""
-    cache_dir = cache_dir or source_manager.get_cache_dir(cfg.outputs_dir)
+    cache_dir = cache_dir or source_manager.get_cache_dir(
+        cfg.outputs_dir,
+        getattr(cfg, "story_cache_dir", None),
+    )
     skip_download = getattr(cfg, "skip_download", False)
 
     if skip_download:
@@ -179,7 +182,7 @@ def run_story_pipeline(cfg) -> list[dict]:
     # ------------------------------------------------------------------
     # Step 3 — Transcribe each source with Whisper
     # ------------------------------------------------------------------
-    print(f"\n[3/6] Transcribing sources with Whisper...")
+    print("\n[3/6] Transcribing sources with Whisper...")
     transcripts = _transcribe_sources(cached_paths, cache_dir, cfg)
     print(f"   📝 {len(transcripts)}/{len(cached_paths)} source(s) berhasil ditranskrip.")
 

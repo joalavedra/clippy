@@ -17,11 +17,22 @@ import shutil
 # CACHE DIRECTORY
 # ==============================================================================
 
-def get_cache_dir(outputs_dir: str) -> str:
+def get_cache_dir(outputs_dir: str, cache_dir: str | None = None) -> str:
     """Return (and create) the story source cache directory."""
-    cache_dir = os.path.join(outputs_dir, "story_cache")
+    cache_dir = cache_dir or os.path.join(outputs_dir, "story_cache")
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
+
+
+def source_fingerprint(source: dict) -> str | None:
+    """Return a stable local-source fingerprint for cache invalidation."""
+    if source.get("platform") != "local":
+        return None
+    try:
+        stat = os.stat(source["local_path"])
+    except (KeyError, OSError):
+        return None
+    return f"{stat.st_size}-{int(stat.st_mtime_ns)}"
 
 
 # ==============================================================================
@@ -58,9 +69,28 @@ def _download_single_source(
     """
     sid = source["id"]
     platform = source["platform"]
+    os.makedirs(cache_dir, exist_ok=True)
     cached_path = os.path.join(cache_dir, f"{sid}.mp4")
+    fingerprint = source_fingerprint(source)
+    fingerprint_path = os.path.join(cache_dir, f"{sid}.fingerprint")
 
     # --- Skip if already cached ---
+    if fingerprint is not None:
+        try:
+            with open(fingerprint_path, encoding="utf-8") as handle:
+                cached_fingerprint = handle.read().strip()
+        except OSError:
+            cached_fingerprint = None
+        if cached_fingerprint != fingerprint:
+            print(f"   ♻️ '{sid}' berubah, invalidating cache.")
+            for path in (
+                cached_path,
+                os.path.join(cache_dir, f"{sid}_transcript.json"),
+            ):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
     if os.path.exists(cached_path):
         size_mb = os.path.getsize(cached_path) / (1024 * 1024)
         print(f"   ⏩ '{sid}' sudah ada di cache ({size_mb:.1f} MB), skip download.")
@@ -71,6 +101,8 @@ def _download_single_source(
         local_path = source["local_path"]
         print(f"   📁 [{sid}] Menyalin file lokal: {local_path}")
         shutil.copy2(local_path, cached_path)
+        with open(fingerprint_path, "w", encoding="utf-8") as handle:
+            handle.write(fingerprint or "")
         print(f"   ✅ '{sid}' berhasil disalin ke cache.")
         return cached_path
 
