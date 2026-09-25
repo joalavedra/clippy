@@ -165,6 +165,57 @@ def catalog_results(conn, storage: Storage, job: dict, results: list[dict]) -> l
             }
             db._create_render_conn(conn, render)
             asset["renders"] = [render]
+            for variant in result.get("variants", []):
+                variant_ratio = variant["format"]
+                variant_slug = variant.get(
+                    "slug",
+                    f"{slug}_{variant_ratio.replace(':', 'x')}",
+                )
+                variant_manifests = {
+                    item.get("clip_id"): item
+                    for item in (variant.get("render") or [])
+                    if item.get("clip_id") is not None
+                }
+                variant_manifest = variant_manifests.get(clip_id, {})
+                variant_source_path = (
+                    variant_manifest.get("final_path")
+                    or variant_manifest.get("highlight_path")
+                )
+                if not variant_source_path or not os.path.exists(variant_source_path):
+                    raise FileNotFoundError(
+                        f"Rendered output not found for {variant_ratio} "
+                        f"variant clip {clip_id}: {variant_source_path}"
+                    )
+                variant_file_key = (
+                    f"{job_id}/{variant_slug}/clip_{clip_id}.mp4"
+                )
+                storage.put(variant_source_path, variant_file_key)
+                variant_thumb_path = variant_manifest.get("thumbnail_path")
+                if not variant_thumb_path or not os.path.exists(variant_thumb_path):
+                    candidate = Path(variant_source_path).with_name(
+                        f"thumbnail_{clip_id}.jpg"
+                    )
+                    variant_thumb_path = _extract_thumbnail(
+                        variant_source_path,
+                        str(candidate),
+                    )
+                variant_thumb_key = None
+                if variant_thumb_path and os.path.exists(variant_thumb_path):
+                    variant_thumb_key = (
+                        f"{job_id}/{variant_slug}/thumbnail_{clip_id}.jpg"
+                    )
+                    storage.put(variant_thumb_path, variant_thumb_key)
+                variant_render = {
+                    "id": db._id(),
+                    "asset_id": asset["id"],
+                    "ratio": variant_ratio,
+                    "duration": duration,
+                    "file_key": variant_file_key,
+                    "thumb_key": variant_thumb_key,
+                    "recipe_clip": clip,
+                }
+                db._create_render_conn(conn, variant_render)
+                asset["renders"].append(variant_render)
             cataloged.append(asset)
     conn.commit()
     return cataloged
@@ -186,7 +237,15 @@ class Worker(threading.Thread):
 
     def _stage_callback(self, job: dict):
         formats = _job_value(job, "formats", [])
-        ratios = [item["ratio"] for item in formats]
+        expected_labels = []
+        for item in formats:
+            ratio = item["ratio"]
+            expected_labels.extend([f"direct:{ratio}", f"render:{ratio}"])
+            expected_labels.extend(
+                f"render:{ratio}>{variant}"
+                for variant in item.get("variants", [])
+            )
+        total_steps = max(1, len(expected_labels))
         last_percent = 0
 
         def on_stage(stage: str, ratio: str):
@@ -195,13 +254,12 @@ class Worker(threading.Thread):
                 percent = 10
                 label = "transcribe"
             else:
-                index = ratios.index(ratio) if ratio in ratios else 0
-                count = max(1, len(ratios))
-                if stage == "direct":
-                    percent = int(10 + 80 * (2 * index) / (2 * count))
-                else:
-                    percent = int(10 + 80 * (2 * index + 1) / (2 * count))
                 label = f"{stage}:{ratio}"
+                index = expected_labels.index(label) if label in expected_labels else -1
+                if index >= 0:
+                    percent = int(10 + 80 * index / total_steps)
+                else:
+                    percent = last_percent
             percent = max(last_percent, percent)
             last_percent = percent
             db.update_job(
@@ -255,6 +313,7 @@ class Worker(threading.Thread):
             format_specs = _job_value(job, "formats", [])
             formats = ",".join(
                 f"{item['ratio']}/{item['min']}-{item['max']}"
+                + "".join(f"+{variant}" for variant in item.get("variants", []))
                 for item in format_specs
             )
             project_name = options.get("project_name") or f"job_{job_id[:8]}"

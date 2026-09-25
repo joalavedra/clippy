@@ -728,7 +728,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Director formats as comma-separated SPEC values, "
-            "for example 16:9/20-30,9:16/8-12."
+            "for example 16:9/20-30+9:16,9:16/8-12."
         ),
     )
     director_group.add_argument(
@@ -892,15 +892,15 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         for raw_spec in args.formats.split(","):
             spec = raw_spec.strip()
             match = re.fullmatch(
-                r"([^/]+)/([0-9]+(?:\.[0-9]+)?)-([0-9]+(?:\.[0-9]+)?)",
+                r"([^/]+)/([0-9]+(?:\.[0-9]+)?)-([0-9]+(?:\.[0-9]+)?)(?:\+(.+))?",
                 spec,
             )
             if not match:
                 parser.error(
                     f"Invalid --formats value '{spec}'. "
-                    "Expected <ratio>/<min>-<max>."
+                    "Expected <ratio>/<min>-<max>[+<variant>...]."
                 )
-            ratio, min_text, max_text = match.groups()
+            ratio, min_text, max_text, variants_text = match.groups()
             if ratio not in DIRECTOR_FORMAT_RATIOS:
                 parser.error(
                     f"Invalid director format ratio '{ratio}'. "
@@ -912,7 +912,23 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
                 parser.error(
                     f"Invalid duration range for --formats '{spec}'."
                 )
-            formats.append((ratio, min_duration, max_duration))
+            variants = variants_text.split("+") if variants_text else []
+            if len(variants) != len(set(variants)):
+                parser.error(
+                    f"Duplicate variant ratio in --formats '{spec}'."
+                )
+            for variant in variants:
+                if variant not in DIRECTOR_FORMAT_RATIOS:
+                    parser.error(
+                        f"Invalid director variant ratio '{variant}'. "
+                        f"Choose from: {', '.join(sorted(DIRECTOR_FORMAT_RATIOS))}."
+                    )
+                if variant == ratio:
+                    parser.error(
+                        f"Variant ratio '{variant}' must differ from primary "
+                        f"ratio '{ratio}'."
+                    )
+            formats.append((ratio, min_duration, max_duration, variants))
 
     # Validate watermark args
     if args.watermark:

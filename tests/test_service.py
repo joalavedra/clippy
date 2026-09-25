@@ -190,6 +190,53 @@ def test_catalog_results_creates_assets_and_renders(tmp_path):
         assert render["duration"] == 8
 
 
+def test_catalog_results_puts_variant_render_on_same_asset(tmp_path):
+    settings = _settings(tmp_path)
+    conn = db.connect(settings.db_path)
+    db.init_schema(conn)
+    job = db.create_job(
+        settings.db_path,
+        brief="brief",
+        formats=[{
+            "ratio": "9:16",
+            "min": 8,
+            "max": 12,
+            "variants": ["16:9"],
+        }],
+        clips=1,
+        options={},
+        project_ids=["p1"],
+    )
+    primary = tmp_path / "primary.mp4"
+    variant = tmp_path / "variant.mp4"
+    primary.write_bytes(b"primary")
+    variant.write_bytes(b"variant")
+    result = _recipe_clip()
+    catalog_results(
+        conn,
+        LocalStorage(settings.storage_root),
+        job,
+        [{
+            "format": "9:16",
+            "slug": "9x16",
+            "recipe": {"clips": [result]},
+            "render": [{"clip_id": 1, "final_path": str(primary)}],
+            "variants": [{
+                "format": "16:9",
+                "slug": "9x16_16x9",
+                "render": [{"clip_id": 1, "final_path": str(variant)}],
+            }],
+        }],
+    )
+    conn.close()
+    assets = db.list_assets(settings.db_path)
+    assert len(assets) == 1
+    assert [render["ratio"] for render in assets[0]["renders"]] == ["9:16", "16:9"]
+    assert assets[0]["renders"][1]["file_key"].endswith(
+        "9x16_16x9/clip_1.mp4"
+    )
+
+
 def test_asset_patch_api(tmp_path):
     settings = _settings(tmp_path)
     job = db.create_job(
@@ -342,6 +389,35 @@ def test_worker_progress_is_monotonic_for_two_formats(tmp_path):
         percentages.append(db.get_job(settings.db_path, job["id"])["percent"])
     assert percentages == [10, 10, 30, 50, 70]
     assert percentages == sorted(percentages)
+
+
+def test_worker_progress_accounts_for_variant_render(tmp_path):
+    settings = _settings(tmp_path)
+    job = db.create_job(
+        settings.db_path,
+        brief="brief",
+        formats=[{
+            "ratio": "9:16",
+            "min": 8,
+            "max": 12,
+            "variants": ["16:9"],
+        }],
+        clips=1,
+        options={},
+        project_ids=[],
+    )
+    callback = Worker(settings)._stage_callback(job)
+    percentages = []
+    for stage, ratio in (
+        ("transcribe", ""),
+        ("direct", "9:16"),
+        ("render", "9:16"),
+        ("render", "9:16>16:9"),
+    ):
+        callback(stage, ratio)
+        percentages.append(db.get_job(settings.db_path, job["id"])["percent"])
+    assert percentages == sorted(percentages)
+    assert percentages[-1] > percentages[-2]
 
 
 def test_worker_reports_classified_download_failure(tmp_path, monkeypatch):

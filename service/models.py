@@ -61,11 +61,16 @@ class FormatSpec(BaseModel):
     ratio: Ratio
     min: float = Field(gt=0)
     max: float = Field(gt=0)
+    variants: list[Ratio] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def min_before_max(self):
         if self.min >= self.max:
             raise ValueError("min must be less than max")
+        if len(self.variants) != len(set(self.variants)):
+            raise ValueError("format variants must not contain duplicates")
+        if self.ratio in self.variants:
+            raise ValueError("format variants must differ from the primary ratio")
         return self
 
 
