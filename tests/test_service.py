@@ -312,9 +312,11 @@ def test_api_key_and_protected_files(tmp_path):
         assert client.get("/api/projects").status_code == 401
         assert client.get("/api/health").status_code == 200
         assert client.get("/files/hello.txt").status_code == 401
+        assert client.get("/api/assets?api_key=test").status_code == 401
         client.headers.update({"X-API-Key": "test"})
         assert client.get("/api/projects").status_code == 200
         assert client.get("/files/hello.txt").status_code == 200
+        client.headers.pop("X-API-Key")
         assert client.get("/files/hello.txt?api_key=test").status_code == 200
         assert client.get("/files/../clippy.db").status_code == 404
 

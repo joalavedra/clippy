@@ -79,22 +79,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    def require_api_key():
+    def check_api_key(provided_key: str | None):
+        if settings.api_key is None:
+            return
+        if not provided_key or not hmac.compare_digest(
+            provided_key, settings.api_key
+        ):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+    def require_header_api_key():
+        def dependency(x_api_key: str | None = Header(default=None)):
+            check_api_key(x_api_key)
+
+        return dependency
+
+    def require_file_api_key():
         def dependency(
             x_api_key: str | None = Header(default=None),
             api_key: str | None = Query(default=None),
         ):
-            if settings.api_key is None:
-                return
-            provided_key = x_api_key if x_api_key is not None else api_key
-            if not provided_key or not hmac.compare_digest(
-                provided_key, settings.api_key
-            ):
-                raise HTTPException(status_code=401, detail="Invalid API key")
+            check_api_key(x_api_key if x_api_key is not None else api_key)
 
         return dependency
 
-    require_api_key_dependency = require_api_key()
+    require_api_key_dependency = require_header_api_key()
+    require_file_api_key_dependency = require_file_api_key()
     api_router = APIRouter(
         prefix="/api",
         dependencies=[Depends(require_api_key_dependency)],
@@ -211,7 +220,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "running": db.count_jobs(settings.db_path, "running"),
         }
 
-    @app.get("/files/{key:path}", dependencies=[Depends(require_api_key_dependency)])
+    @app.get(
+        "/files/{key:path}",
+        dependencies=[Depends(require_file_api_key_dependency)],
+    )
     def get_file(key: str):
         try:
             candidate = Path(storage.path(key)).resolve()

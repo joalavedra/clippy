@@ -26,8 +26,11 @@ export interface Render {
 }
 
 export interface AssetMetadata {
-  description?: string;
-  hashtags?: string[];
+  metadata?: {
+    title?: string;
+    description?: string;
+    hashtags?: string[];
+  };
   [key: string]: unknown;
 }
 
