@@ -98,6 +98,61 @@ def _resize_frame(frame, size, cfg=None):
     return cv2.resize(frame, size, interpolation=_get_cv2_interpolation(cfg))
 
 
+def _even_size(value: int, limit: int) -> int:
+    value = min(value, limit)
+    if value % 2:
+        value -= 1
+    return max(2, value)
+
+
+def _fit_frame_geometry(frame, out_w, out_h):
+    src_h, src_w = frame.shape[:2]
+    scale = min(out_w / src_w, out_h / src_h)
+    fit_w = _even_size(round(src_w * scale), out_w)
+    fit_h = _even_size(round(src_h * scale), out_h)
+    resized = cv2.resize(frame, (fit_w, fit_h), interpolation=cv2.INTER_AREA)
+    return resized, (out_w - fit_w) // 2, (out_h - fit_h) // 2
+
+
+def fit_frame_pad(frame, out_w, out_h):
+    """Fit a frame inside a black canvas while preserving its aspect ratio."""
+    resized, x_offset, y_offset = _fit_frame_geometry(frame, out_w, out_h)
+    fit_h, fit_w = resized.shape[:2]
+    canvas = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+    canvas[y_offset : y_offset + fit_h, x_offset : x_offset + fit_w] = resized
+    return canvas
+
+
+def fit_frame_blur(frame, out_w, out_h, blur_sigma=25, darken=0.6):
+    """Fit a frame over a blurred, darkened cover background."""
+    src_h, src_w = frame.shape[:2]
+    cover_scale = max(out_w / src_w, out_h / src_h)
+    cover_w = max(out_w, round(src_w * cover_scale))
+    cover_h = max(out_h, round(src_h * cover_scale))
+    background = cv2.resize(
+        frame, (cover_w, cover_h), interpolation=cv2.INTER_AREA
+    )
+    x_offset = max(0, (cover_w - out_w) // 2)
+    y_offset = max(0, (cover_h - out_h) // 2)
+    background = background[
+        y_offset : y_offset + out_h,
+        x_offset : x_offset + out_w,
+    ]
+    background = cv2.GaussianBlur(
+        background, (0, 0), sigmaX=blur_sigma
+    )
+    background = np.clip(
+        background.astype(np.float32) * darken, 0, 255
+    ).astype(np.uint8)
+    foreground, x_offset, y_offset = _fit_frame_geometry(frame, out_w, out_h)
+    fit_h, fit_w = foreground.shape[:2]
+    background[
+        y_offset : y_offset + fit_h,
+        x_offset : x_offset + fit_w,
+    ] = foreground
+    return background
+
+
 
 # ── Aspect Ratio Helpers ────────────────────────────────────────────────
 # Maps a ratio string to (width_part, height_part).
@@ -166,5 +221,3 @@ def _get_render_dims(cfg, rasio, source_h=1080):
         out_h += 1
 
     return out_w, out_h
-
-

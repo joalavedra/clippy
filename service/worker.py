@@ -286,6 +286,12 @@ class Worker(threading.Thread):
             ]
             if options.get("clean_speech", False):
                 argv.append("--clean-speech")
+            argv.extend(
+                [
+                    "--reframe-fallback",
+                    options.get("reframe_fallback", "blur"),
+                ]
+            )
             cfg = build_config(argv)
             cfg.story_cache_dir = self.settings.cache_dir
             results = director.run_director(

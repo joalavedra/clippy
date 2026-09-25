@@ -47,6 +47,8 @@ run_ffmpeg_with_progress = _ffmpeg_utils.run_ffmpeg_with_progress
 utils = _load_studio_internal_module("utils.py", "clipping_studio_utils")
 _get_cv2_interpolation = utils._get_cv2_interpolation
 _resize_frame = utils._resize_frame
+fit_frame_blur = utils.fit_frame_blur
+fit_frame_pad = utils.fit_frame_pad
 _get_render_dims = utils._get_render_dims
 _is_vertical_ratio = utils._is_vertical_ratio
 RATIO_MAP = utils.RATIO_MAP
@@ -328,6 +330,26 @@ def buat_video_hybrid(
             smooth_data, shot_cuts, STEP_DETEKSI
         )
 
+    fallback_intervals = []
+    fallback_mode = getattr(cfg, "reframe_fallback", "blur")
+    if (
+        _is_vertical_ratio(rasio)
+        and fallback_mode != "none"
+        and not skip_tracking
+    ):
+        fallback_intervals = camera_path.fallback_intervals(
+            raw_data,
+            shot_cuts,
+            duration,
+            min_coverage=getattr(cfg, "fallback_face_coverage", 0.3),
+            min_len=0.8,
+        )
+        print(
+            f"[camera] {len(fallback_intervals)} fallback shots (fit mode): "
+            f"{fallback_intervals}",
+            flush=True,
+        )
+
     def get_x(t):
         return camera_path.interp(
             smooth_data, t, keys=("cx",), defaults=(default_cx,)
@@ -401,10 +423,23 @@ def buat_video_hybrid(
             if _is_vertical_ratio(rasio):
                 # Vertical/square ratios: face-tracked crop
                 cx_base, cy_base = _get_pos(t)
-                x1_crop = int(max(0, min(cx_base - crop_w // 2, width - crop_w)))
-                y1_crop = int(max(0, min(cy_base - crop_h // 2, height - crop_h)))
-                cropped = frame_utama[y1_crop : y1_crop + crop_h, x1_crop : x1_crop + crop_w]
-                frame_normal = _resize_frame(cropped, (base_out_w, base_out_h))
+                if camera_path.in_intervals(fallback_intervals, t):
+                    fit_fn = (
+                        fit_frame_pad
+                        if fallback_mode == "pad"
+                        else fit_frame_blur
+                    )
+                    frame_normal = fit_fn(
+                        frame_utama, base_out_w, base_out_h
+                    )
+                else:
+                    x1_crop = int(max(0, min(cx_base - crop_w // 2, width - crop_w)))
+                    y1_crop = int(max(0, min(cy_base - crop_h // 2, height - crop_h)))
+                    cropped = frame_utama[
+                        y1_crop : y1_crop + crop_h,
+                        x1_crop : x1_crop + crop_w,
+                    ]
+                    frame_normal = _resize_frame(cropped, (base_out_w, base_out_h))
             else:
                 # 16:9 landscape: fit-to-height with letterbox (no stretch)
                 cx_base, cy_base = default_cx, default_cy
@@ -484,7 +519,11 @@ def buat_video_hybrid(
                 hud_lines = [
                     f"MODE: HYBRID STANDARD (DEV)",
                     f"TIME: {format_seconds(t)}",
-                    f"LAYOUT: FULL {rasio}",
+                    (
+                        "LAYOUT: FIT (fallback)"
+                        if camera_path.in_intervals(fallback_intervals, t)
+                        else f"LAYOUT: FULL {rasio}"
+                    ),
                     f"ANCHOR CX: {int(cx_base)}"
                 ]
                 for i, line in enumerate(hud_lines):
