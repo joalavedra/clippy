@@ -119,10 +119,7 @@ def catalog_results(conn, storage: Storage, job: dict, results: list[dict]) -> l
             storage.put(source_path, file_key)
             thumb_path = manifest.get("thumbnail_path")
             if not thumb_path or not os.path.exists(thumb_path):
-                outputs_dir = Path(source_path).parent
-                if result.get("recipe_path"):
-                    outputs_dir = Path(result["recipe_path"]).parent
-                candidate = outputs_dir / f"thumbnail_{clip_id}.jpg"
+                candidate = Path(source_path).with_name(f"thumbnail_{clip_id}.jpg")
                 thumb_path = (
                     str(candidate)
                     if candidate.exists()
