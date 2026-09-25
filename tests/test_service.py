@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from service import db
@@ -193,8 +196,24 @@ def test_worker_success_and_failure(tmp_path, monkeypatch):
         options={},
         project_ids=[project["id"]],
     )
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for thumbnail extraction")
     output = tmp_path / "render.mp4"
-    output.write_bytes(b"video")
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x64:d=1",
+            "-pix_fmt",
+            "yuv420p",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+    )
 
     monkeypatch.setattr(
         "service.worker.build_config",
@@ -232,6 +251,11 @@ def test_worker_success_and_failure(tmp_path, monkeypatch):
         "render:9:16",
         "catalog",
     }
+    assets = db.list_assets(settings.db_path)
+    assert assets[0]["renders"][0]["thumb_key"]
+    assert Path(
+        LocalStorage(settings.storage_root).path(assets[0]["renders"][0]["thumb_key"])
+    ).is_file()
 
     failed_job = db.create_job(
         settings.db_path,
