@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .models import (
@@ -32,6 +33,9 @@ LOGGER = logging.getLogger(__name__)
 def _render_response(render: dict, storage: LocalStorage) -> dict:
     render = dict(render)
     render["url"] = storage.url(render["file_key"])
+    render["thumb_url"] = (
+        storage.url(render["thumb_key"]) if render.get("thumb_key") else None
+    )
     return render
 
 
@@ -75,18 +79,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    def require_api_key():
+    def check_api_key(provided_key: str | None):
+        if settings.api_key is None:
+            return
+        if not provided_key or not hmac.compare_digest(
+            provided_key, settings.api_key
+        ):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+    def require_header_api_key():
         def dependency(x_api_key: str | None = Header(default=None)):
-            if settings.api_key is None:
-                return
-            if not x_api_key or not hmac.compare_digest(
-                x_api_key, settings.api_key
-            ):
-                raise HTTPException(status_code=401, detail="Invalid API key")
+            check_api_key(x_api_key)
 
         return dependency
 
-    require_api_key_dependency = require_api_key()
+    def require_file_api_key():
+        def dependency(
+            x_api_key: str | None = Header(default=None),
+            api_key: str | None = Query(default=None),
+        ):
+            check_api_key(x_api_key if x_api_key is not None else api_key)
+
+        return dependency
+
+    require_api_key_dependency = require_header_api_key()
+    require_file_api_key_dependency = require_file_api_key()
     api_router = APIRouter(
         prefix="/api",
         dependencies=[Depends(require_api_key_dependency)],
@@ -203,7 +220,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "running": db.count_jobs(settings.db_path, "running"),
         }
 
-    @app.get("/files/{key:path}", dependencies=[Depends(require_api_key_dependency)])
+    @app.get(
+        "/files/{key:path}",
+        dependencies=[Depends(require_file_api_key_dependency)],
+    )
     def get_file(key: str):
         try:
             candidate = Path(storage.path(key)).resolve()
@@ -217,6 +237,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not candidate.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(str(candidate))
+
+    web_ui_dist = Path(__file__).resolve().parent.parent / "web-ui" / "dist"
+    if web_ui_dist.is_dir():
+        app.mount(
+            "/",
+            StaticFiles(directory=str(web_ui_dist), html=True),
+            name="web-ui",
+        )
 
     return app
 

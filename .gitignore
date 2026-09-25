@@ -34,6 +34,10 @@ youtube_token.json
 .pytest_cache/
 .ruff_cache/
 uploads/
+web-ui/node_modules/
+web-ui/dist/
+!web-ui/vite.config.ts
+!web-ui/src/**/*.ts
 
 # YouTube Tracker local database
 youtube_tracker/*.sqlite3
