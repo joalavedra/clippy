@@ -13,6 +13,7 @@ from typing import Any
 
 from clipping.config import build_config
 from clipping import director
+from clipping.ingest_errors import DownloadError, user_message
 
 from . import db, search
 from .settings import Settings
@@ -286,8 +287,28 @@ class Worker(threading.Thread):
             ]
             if options.get("clean_speech", False):
                 argv.append("--clean-speech")
+            argv.extend(
+                [
+                    "--reframe-fallback",
+                    options.get("reframe_fallback", "blur"),
+                ]
+            )
+            db.update_job(
+                self.settings.db_path,
+                job_id,
+                stage="download",
+                percent=5,
+            )
+            if not any(
+                event["stage"]
+                == "download"
+                for event in db.list_events(self.settings.db_path, job_id)
+            ):
+                db.add_event(self.settings.db_path, job_id, "download", "")
             cfg = build_config(argv)
             cfg.story_cache_dir = self.settings.cache_dir
+            cfg.ytdlp_cookies = self.settings.ytdlp_cookies
+            cfg.download_retries = self.settings.download_retries
             results = director.run_director(
                 cfg,
                 on_stage=self._stage_callback(job),
@@ -345,7 +366,19 @@ class Worker(threading.Thread):
                 error=None,
             )
         except Exception as exc:
-            error = str(exc)
+            if isinstance(exc, DownloadError):
+                error = (
+                    f"Download failed for source {exc.source_id}: "
+                    f"{user_message(exc)}"
+                )
+                db.add_event(
+                    self.settings.db_path,
+                    job_id,
+                    "download_failed",
+                    error,
+                )
+            else:
+                error = str(exc)
             LOGGER.error("Job %s failed:\n%s", job_id, traceback.format_exc())
             db.update_job(
                 self.settings.db_path,

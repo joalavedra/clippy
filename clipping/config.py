@@ -668,6 +668,35 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Remove filler words and long dead-air gaps from Story scenes.",
     )
+    story_group.add_argument(
+        "--reframe-fallback",
+        choices=["blur", "pad", "none"],
+        default="blur",
+        help="Vertical reframe behavior when face tracking has no coverage.",
+    )
+    story_group.add_argument(
+        "--fallback-face-coverage",
+        type=float,
+        default=0.3,
+        help="Minimum detected-face coverage required for vertical reframing.",
+    )
+    story_group.add_argument(
+        "--strict-sources",
+        action="store_true",
+        default=False,
+        help="Fail the run when any source cannot be downloaded.",
+    )
+    story_group.add_argument(
+        "--ytdlp-cookies",
+        default=os.environ.get("CLIPPY_YTDLP_COOKIES"),
+        help="Path to a Netscape cookies.txt file for yt-dlp.",
+    )
+    story_group.add_argument(
+        "--download-retries",
+        type=int,
+        default=2,
+        help="Number of retries for transient source download failures.",
+    )
 
     # --- Director Stage ---
     director_group = p.add_argument_group("Director Stage")
@@ -853,6 +882,8 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         parser.error("--target-min must be greater than zero.")
     if args.target_max < args.target_min:
         parser.error("--target-max must be greater than or equal to --target-min.")
+    if args.download_retries < 0:
+        parser.error("--download-retries must not be negative.")
     formats = None
     if args.formats:
         if not args.director:
@@ -1051,6 +1082,11 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         story_style=args.story_style,
         story_cut_sheets=not args.no_cut_sheets,
         clean_speech=args.clean_speech,
+        reframe_fallback=args.reframe_fallback,
+        fallback_face_coverage=args.fallback_face_coverage,
+        strict_sources=args.strict_sources or args.director,
+        ytdlp_cookies=args.ytdlp_cookies,
+        download_retries=args.download_retries,
         # Director Stage
         director=args.director,
         brief=args.brief,

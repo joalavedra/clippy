@@ -6,6 +6,122 @@ import cv2
 import numpy as np
 
 
+def fallback_intervals(
+    samples: list[dict],
+    cuts: list[float],
+    duration: float,
+    min_coverage: float = 0.3,
+    min_len: float = 0.8,
+) -> list[tuple[float, float]]:
+    """Find shot and within-shot spans where face tracking should be bypassed."""
+    if duration <= 0:
+        return []
+
+    boundaries = [0.0]
+    boundaries.extend(
+        sorted(
+            {
+                max(0.0, min(float(cut), float(duration)))
+                for cut in cuts
+                if 0.0 < float(cut) < float(duration)
+            }
+        )
+    )
+    boundaries.append(float(duration))
+    ordered_samples = sorted(
+        (
+            sample
+            for sample in samples
+            if 0.0 <= float(sample.get("time", -1)) <= duration
+        ),
+        key=lambda sample: float(sample["time"]),
+    )
+    sample_times = [float(sample["time"]) for sample in ordered_samples]
+    spacings = [
+        second - first
+        for first, second in zip(sample_times, sample_times[1:])
+        if second > first
+    ]
+    step = float(np.median(spacings)) if spacings else 0.0
+    miss_run_length = (
+        max(4, int(np.ceil(2.0 / step))) if step > 0 else len(ordered_samples) + 1
+    )
+    intervals: list[tuple[float, float]] = []
+
+    for start, end in zip(boundaries, boundaries[1:]):
+        in_shot = [
+            sample
+            for sample in ordered_samples
+            if start <= float(sample["time"]) < end
+            or (
+                end == duration
+                and float(sample["time"]) == end
+            )
+        ]
+        if not in_shot:
+            continue
+        coverage = (
+            sum(bool(sample.get("detected", False)) for sample in in_shot)
+            / len(in_shot)
+        )
+        shot_fallback = end - start >= min_len and coverage < min_coverage
+        if shot_fallback:
+            intervals.append((start, end))
+            continue
+        if step <= 0:
+            continue
+
+        run_start = None
+        run_length = 0
+        previous_miss_time = 0.0
+        for sample in in_shot:
+            if sample.get("detected", False):
+                if run_start is not None and run_length >= miss_run_length:
+                    intervals.append(
+                        (
+                            max(start, run_start),
+                            min(end, float(previous_miss_time) + step),
+                        )
+                    )
+                run_start = None
+                run_length = 0
+                continue
+            if run_start is None:
+                run_start = float(sample["time"])
+            run_length += 1
+            previous_miss_time = float(sample["time"])
+        if run_start is not None and run_length >= miss_run_length:
+            intervals.append(
+                (
+                    max(start, run_start),
+                    min(end, float(previous_miss_time) + step),
+                )
+            )
+
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(intervals):
+        if end <= start:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def in_intervals(
+    intervals: list[tuple[float, float]],
+    t: float,
+    duration: float | None = None,
+) -> bool:
+    """Return whether ``t`` falls inside any fallback interval."""
+    return any(
+        start <= t < end
+        or (duration is not None and t == end and end >= duration)
+        for start, end in intervals
+    )
+
+
 def detect_cuts(
     cap,
     clip_start: float,

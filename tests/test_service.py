@@ -16,6 +16,7 @@ from service.media_tokens import sign_media_token
 from service.settings import Settings
 from service.storage import LocalStorage
 from service.worker import Worker, catalog_results
+from clipping.ingest_errors import DownloadError
 
 
 def _settings(tmp_path):
@@ -341,6 +342,50 @@ def test_worker_progress_is_monotonic_for_two_formats(tmp_path):
         percentages.append(db.get_job(settings.db_path, job["id"])["percent"])
     assert percentages == [10, 10, 30, 50, 70]
     assert percentages == sorted(percentages)
+
+
+def test_worker_reports_classified_download_failure(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    project = db.create_project(
+        settings.db_path,
+        name="Remote project",
+        platform="youtube",
+        url="https://www.youtube.com/watch?v=video",
+    )
+    job = db.create_job(
+        settings.db_path,
+        brief="brief",
+        formats=[{"ratio": "9:16", "min": 8, "max": 12}],
+        clips=1,
+        options={},
+        project_ids=[project["id"]],
+    )
+    monkeypatch.setattr(
+        "service.worker.build_config",
+        lambda argv: SimpleNamespace(
+            outputs_dir=str(tmp_path / "job-output"),
+            story_cache_dir=None,
+        ),
+    )
+
+    def failed_run(cfg, on_stage=None):
+        raise DownloadError(
+            "bot_check",
+            source_id="src1",
+            detail="Sign in to confirm you're not a bot",
+        )
+
+    monkeypatch.setattr("service.worker.director.run_director", failed_run)
+    Worker(settings).run_job(job)
+
+    failed = db.get_job(settings.db_path, job["id"])
+    assert failed["status"] == "failed"
+    assert "bot check" in failed["error"].lower()
+    assert "CLIPPY_YTDLP_COOKIES" in failed["error"]
+    assert any(
+        event["stage"] == "download_failed"
+        for event in db.list_events(settings.db_path, job["id"])
+    )
 
 
 def test_requeue_running_jobs(tmp_path):

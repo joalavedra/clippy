@@ -75,6 +75,7 @@ class JobOptions(BaseModel):
     whisper_compute_type: str = "int8"
     story_style: Literal["styled"] = "styled"
     clean_speech: bool = False
+    reframe_fallback: Literal["blur", "pad", "none"] = "blur"
     gemini_timeout: int = Field(default=180, gt=0)
     project_name: str | None = None
 

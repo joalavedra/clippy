@@ -20,6 +20,7 @@ def _load_transcript_bundle(
 ) -> tuple[dict[str, dict], dict[str, str]]:
     """Cache sources, transcribe them, and attach their media paths."""
     os.makedirs(cache_dir, exist_ok=True)
+    cfg.strict_sources = getattr(cfg, "strict_sources", True)
     cache_dir, cached_paths = story_runner._prepare_source_cache(
         sources, cfg, cache_dir
     )
@@ -320,6 +321,27 @@ def clean_scene_speech(
     return cleaned
 
 
+def apply_clean_speech(recipe: dict, transcripts_meta: dict) -> dict:
+    """Expand every recipe scene using its source's word-level transcript."""
+    for clip in recipe.get("clips", []):
+        for section_name in ("hook", "highlight"):
+            section = clip.get(section_name, {})
+            expanded = []
+            for scene in section.get("scenes", []):
+                if scene.get("start") is None or scene.get("end") is None:
+                    expanded.append(scene)
+                    continue
+                metadata = transcripts_meta.get(scene.get("source_id"))
+                if metadata is None:
+                    expanded.append(scene)
+                    continue
+                expanded.extend(
+                    clean_scene_speech(scene, metadata.get("segmen", []))
+                )
+            section["scenes"] = expanded
+    return recipe
+
+
 def _clamp_scene(scene: dict, transcripts_meta: dict, section: str) -> bool:
     source_id = scene.get("source_id")
     if source_id not in transcripts_meta:
@@ -387,35 +409,29 @@ def validate_recipe(recipe, transcripts_meta, cfg=None):
     lower_bound = min_duration * 0.85
     upper_bound = max_duration * 1.15
 
+    for clip in recipe.get("clips", []):
+        hook = clip.get("hook", {})
+        highlight = clip.get("highlight", {})
+        hook["scenes"] = [
+            scene
+            for scene in hook.get("scenes", [])
+            if _clamp_scene(scene, transcripts_meta, "hook")
+        ]
+        highlight["scenes"] = [
+            scene
+            for scene in highlight.get("scenes", [])
+            if _clamp_scene(scene, transcripts_meta, "highlight")
+        ]
+
+    if getattr(cfg, "clean_speech", False):
+        apply_clean_speech(recipe, transcripts_meta)
+
     valid_clips = []
     for clip in recipe.get("clips", []):
         hook = clip.get("hook", {})
         highlight = clip.get("highlight", {})
-        hook_scenes = []
-        for scene in hook.get("scenes", []):
-            if _clamp_scene(scene, transcripts_meta, "hook"):
-                hook_scenes.extend(
-                    clean_scene_speech(
-                        scene,
-                        transcripts_meta[scene["source_id"]].get("segmen", []),
-                    )
-                    if getattr(cfg, "clean_speech", False)
-                    else [scene]
-                )
-        highlight_scenes = []
-        for scene in highlight.get("scenes", []):
-            if _clamp_scene(scene, transcripts_meta, "highlight"):
-                highlight_scenes.extend(
-                    clean_scene_speech(
-                        scene,
-                        transcripts_meta[scene["source_id"]].get("segmen", []),
-                    )
-                    if getattr(cfg, "clean_speech", False)
-                    else [scene]
-                )
-        hook["scenes"] = hook_scenes
-        highlight["scenes"] = highlight_scenes
-
+        hook_scenes = hook.get("scenes", [])
+        highlight_scenes = highlight.get("scenes", [])
         if not hook_scenes or not highlight_scenes:
             print(
                 f"⚠️ Dropping clip {clip.get('clip_id', '?')}: "
