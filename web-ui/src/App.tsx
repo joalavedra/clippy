@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, fileUrl, ApiError } from "./api";
 import type {
@@ -205,6 +205,16 @@ function AssetTable({
   );
 }
 
+function stripToken(url: string): string {
+  return url.replace(/[?&]token=[^&]*/, "");
+}
+
+function tokenExpiresSoon(url: string, marginSeconds = 15 * 60): boolean {
+  const match = /[?&]token=(\d+)\./.exec(url);
+  if (!match) return false;
+  return Number(match[1]) <= Date.now() / 1000 + marginSeconds;
+}
+
 function AssetDrawer({
   asset,
   projects,
@@ -216,9 +226,20 @@ function AssetDrawer({
   onClose: () => void;
   onPatch: (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => void;
 }) {
-  const [selected, setSelected] = useState<Render>(asset.renders[0]);
+  const [selectedRenderId, setSelectedRenderId] = useState<string | null>(asset.renders[0]?.id ?? null);
   const [tab, setTab] = useState<"transcript" | "social" | "covers">("transcript");
-  useEffect(() => setSelected(asset.renders[0]), [asset]);
+  useEffect(() => setSelectedRenderId(asset.renders[0]?.id ?? null), [asset.id]);
+  const selected: Render | undefined = asset.renders.find((render) => render.id === selectedRenderId) ?? asset.renders[0];
+  const setSelected = (render: Render) => setSelectedRenderId(render.id);
+  const [videoSrc, setVideoSrc] = useState<string | undefined>(fileUrl(selected?.url) ?? undefined);
+  useEffect(() => {
+    const next = fileUrl(selected?.url) ?? undefined;
+    setVideoSrc((current) => {
+      if (!current || !next) return next;
+      if (stripToken(current) !== stripToken(next)) return next;
+      return tokenExpiresSoon(current) ? next : current;
+    });
+  }, [selected?.id, selected?.url]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
@@ -233,7 +254,7 @@ function AssetDrawer({
         <div className="drawer-header"><div><div className="eyebrow">CLIP {asset.clip_id}</div><h2>{asset.title}</h2><div className="drawer-project">{asset.project_ids.map((id) => <Chip key={id}>{projectName(projects, id)}</Chip>)}</div></div><button className="close-button" onClick={onClose}>×</button></div>
         <div className="drawer-summary"><ScoreBadge score={asset.viral_score} />{selected && <DurationBadge duration={selected.duration} />}<StateChip state={asset.state} /></div>
         <div className="format-toggle">{asset.renders.map((render) => <button className={selected?.id === render.id ? "format-selected" : ""} key={render.id} onClick={() => setSelected(render)}>{render.ratio === "9:16" ? "Vertical" : render.ratio === "16:9" ? "Horizontal" : "Square"}<small>{render.ratio}</small></button>)}</div>
-        {selected && <video className={`drawer-video ratio-${selected.ratio.replace(":", "-")}`} controls src={fileUrl(selected.url) ?? undefined} />}
+        {selected && <video className={`drawer-video ratio-${selected.ratio.replace(":", "-")}`} controls src={videoSrc} />}
         <div className="drawer-tabs">{(["transcript", "social", "covers"] as const).map((item) => <button className={tab === item ? "tab-active" : ""} key={item} onClick={() => setTab(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}</div>
         <div className="drawer-panel">
           {tab === "transcript" && <div className="copy-blocks"><CopyBlock label="Hook" value={asset.hook_line} onCopy={copy} /><CopyBlock label="Why it works" value={asset.rationale} onCopy={copy} /></div>}
@@ -250,7 +271,7 @@ function CopyBlock({ label, value, onCopy }: { label: string; value: string; onC
   return <div className="copy-block"><div className="block-label">{label}<button className="copy-button" onClick={() => onCopy(value)}>Copy</button></div><p>{value}</p></div>;
 }
 
-function Library({ assets, projects, onPatch }: { assets: Asset[]; projects: Project[]; onPatch: (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => void }) {
+function Library({ assets, projects, onPatch, reloadAssets }: { assets: Asset[]; projects: Project[]; onPatch: (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => void; reloadAssets: () => Promise<void> }) {
   const [project, setProject] = useState("");
   const [ratio, setRatio] = useState("");
   const [score, setScore] = useState("");
@@ -259,6 +280,18 @@ function Library({ assets, projects, onPatch }: { assets: Asset[]; projects: Pro
   const [search, setSearch] = useState("");
   const [view, setView] = useState<ViewMode>("cards");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (selectedId) void reloadAssets();
+  }, [selectedId, reloadAssets]);
+  useEffect(() => {
+    const refresh = () => void reloadAssets();
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 10 * 60 * 1000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
+  }, [reloadAssets]);
   const filtered = useMemo(() => assets.filter((asset) => {
     const text = `${asset.title} ${asset.hook_line}`.toLowerCase();
     return (!project || asset.project_ids.includes(project))
@@ -353,7 +386,13 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState("");
   const loadProjects = async () => setProjects(await api<Project[]>("/api/projects"));
-  const loadAssets = async () => setAssets(await api<Asset[]>("/api/assets"));
+  const loadAssets = useCallback(
+    async () => setAssets(await api<Asset[]>("/api/assets")),
+    [],
+  );
+  const refreshAssets = useCallback(async () => {
+    try { await loadAssets(); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to refresh clips; media links may be stale"); }
+  }, [loadAssets]);
   const loadJobs = async () => setJobs(await api<Job[]>("/api/jobs"));
   const loadHealth = async () => setHealth(await api<Health>("/api/health"));
   const reload = async () => { try { await Promise.all([loadProjects(), loadAssets(), loadJobs(), loadHealth()]); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to reach the service"); } };
@@ -361,5 +400,5 @@ export default function App() {
   const patchAsset = async (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => {
     try { const updated = await api<Asset>(`/api/assets/${asset.id}`, { method: "PATCH", body: JSON.stringify(patch) }); setAssets((current) => current.map((item) => item.id === updated.id ? updated : item)); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to update asset"); }
   };
-  return <AppShell screen={screen} setScreen={setScreen} projects={projects} assets={assets}>{error && <div className="global-error">{error}<button onClick={() => setError("")}>×</button></div>}{screen === "library" && <Library assets={assets} projects={projects} onPatch={patchAsset} />}{screen === "jobs" && <Jobs jobs={jobs} projects={projects} reload={reload} />}{screen === "settings" && <SettingsPage health={health} refreshHealth={loadHealth} />}</AppShell>;
+  return <AppShell screen={screen} setScreen={setScreen} projects={projects} assets={assets}>{error && <div className="global-error">{error}<button onClick={() => setError("")}>×</button></div>}{screen === "library" && <Library assets={assets} projects={projects} onPatch={patchAsset} reloadAssets={refreshAssets} />}{screen === "jobs" && <Jobs jobs={jobs} projects={projects} reload={reload} />}{screen === "settings" && <SettingsPage health={health} refreshHealth={loadHealth} />}</AppShell>;
 }
