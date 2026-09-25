@@ -36,8 +36,5 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function fileUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  const key = localStorage.getItem("clippy_api_key");
-  if (!key) return url;
-  return `${url}${url.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(key)}`;
+  return url || null;
 }

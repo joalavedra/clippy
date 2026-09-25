@@ -107,6 +107,9 @@ renders    id, asset_id, ratio, duration, file_key, thumb_key, recipe_clip(json)
 - `service/db.py` — sqlite3 (WAL), schema above, thin repository functions.
 - `service/storage.py` — `Storage` protocol (`put(path, key) -> key`,
   `url(key)`), `LocalStorage(root)` served at `/files/{key}`. S3 later.
+  API responses sign media URLs with short-lived per-file tokens when media
+  signing is configured; the files route accepts those tokens or the API-key
+  header, but never API keys in query parameters.
 - `service/worker.py` — background thread; picks `queued` jobs, writes a
   per-job `sources.json`, builds the engine config with
   `clipping.config.build_config(argv)` exactly as the CLI would, calls
@@ -129,8 +132,9 @@ GET  /api/health
 
 Not in v1: multiple workers/queue (swap the thread for a queue consumer),
 publishing, covers, search. The API key and local-media-root checks define the
-v1 trust boundary for this local service; production auth and identity are
-still future work. `web/api` (upstream GUI for the single-URL pipeline) is
+v1 trust boundary for this local service; signed media URLs provide scoped,
+short-lived access to rendered files. Production auth and identity are still
+future work. `web/api` (upstream GUI for the single-URL pipeline) is
 left untouched.
 
 ## 3. Known gaps / next work (priority order)

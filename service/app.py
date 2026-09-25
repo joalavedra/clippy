@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import hmac
 import logging
 import os
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
@@ -14,6 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
+from .media_tokens import sign_media_token, verify_media_token
 from .models import (
     Asset,
     AssetPatch,
@@ -30,19 +32,36 @@ from .worker import Worker
 LOGGER = logging.getLogger(__name__)
 
 
-def _render_response(render: dict, storage: LocalStorage) -> dict:
+def _render_response(
+    render: dict,
+    storage: LocalStorage,
+    settings: Settings,
+) -> dict:
     render = dict(render)
-    render["url"] = storage.url(render["file_key"])
+    def media_url(file_key: str) -> str:
+        url = storage.url(file_key)
+        if settings.media_secret:
+            expires_at = int(time.time()) + settings.media_token_ttl
+            token = sign_media_token(settings.media_secret, file_key, expires_at)
+            return f"{url}?token={token}"
+        return url
+
+    render["url"] = media_url(render["file_key"])
     render["thumb_url"] = (
-        storage.url(render["thumb_key"]) if render.get("thumb_key") else None
+        media_url(render["thumb_key"]) if render.get("thumb_key") else None
     )
     return render
 
 
-def _asset_response(asset: dict, storage: LocalStorage) -> dict:
+def _asset_response(
+    asset: dict,
+    storage: LocalStorage,
+    settings: Settings,
+) -> dict:
     asset = dict(asset)
     asset["renders"] = [
-        _render_response(render, storage) for render in asset.get("renders", [])
+        _render_response(render, storage, settings)
+        for render in asset.get("renders", [])
     ]
     return asset
 
@@ -93,17 +112,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         return dependency
 
-    def require_file_api_key():
+    def require_file_access():
         def dependency(
+            key: str,
             x_api_key: str | None = Header(default=None),
-            api_key: str | None = Query(default=None),
+            token: str | None = Query(default=None),
         ):
-            check_api_key(x_api_key if x_api_key is not None else api_key)
+            if settings.api_key is None:
+                return
+            try:
+                check_api_key(x_api_key)
+                return
+            except HTTPException:
+                pass
+            if (
+                token
+                and settings.media_secret
+                and verify_media_token(
+                    settings.media_secret,
+                    key,
+                    token,
+                )
+            ):
+                return
+            raise HTTPException(status_code=401, detail="Invalid API key")
 
         return dependency
 
     require_api_key_dependency = require_header_api_key()
-    require_file_api_key_dependency = require_file_api_key()
+    require_file_access_dependency = require_file_access()
     api_router = APIRouter(
         prefix="/api",
         dependencies=[Depends(require_api_key_dependency)],
@@ -187,14 +224,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             state=state,
             favorite=favorite,
         )
-        return [_asset_response(row, storage) for row in rows]
+        return [_asset_response(row, storage, settings) for row in rows]
 
     @api_router.get("/assets/{asset_id}", response_model=Asset)
     def get_asset(asset_id: str):
         asset = db.get_asset(settings.db_path, asset_id)
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
-        return _asset_response(asset, storage)
+        return _asset_response(asset, storage, settings)
 
     @api_router.patch("/assets/{asset_id}", response_model=Asset)
     def patch_asset(asset_id: str, payload: AssetPatch):
@@ -206,7 +243,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
-        return _asset_response(asset, storage)
+        return _asset_response(asset, storage, settings)
 
     app.include_router(api_router)
 
@@ -222,7 +259,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(
         "/files/{key:path}",
-        dependencies=[Depends(require_file_api_key_dependency)],
+        dependencies=[Depends(require_file_access_dependency)],
     )
     def get_file(key: str):
         try:

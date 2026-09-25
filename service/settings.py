@@ -24,6 +24,14 @@ class Settings:
     api_key: str | None = field(
         default_factory=lambda: os.environ.get("CLIPPY_API_KEY")
     )
+    media_token_ttl: int = field(
+        default_factory=lambda: int(
+            os.environ.get("CLIPPY_MEDIA_TOKEN_TTL", "3600")
+        )
+    )
+    media_secret: str | None = field(
+        default_factory=lambda: os.environ.get("CLIPPY_MEDIA_SECRET")
+    )
     local_media_roots: list[str] | None = None
     cors_origins: list[str] = field(
         default_factory=lambda: [
@@ -43,6 +51,8 @@ class Settings:
 
     def __post_init__(self):
         self.data_dir = os.path.abspath(self.data_dir)
+        if self.media_secret is None:
+            self.media_secret = self.api_key
         if self.local_media_roots is None:
             raw_roots = os.environ.get("CLIPPY_LOCAL_MEDIA_ROOTS")
             if raw_roots:
