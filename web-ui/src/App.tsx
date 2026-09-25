@@ -205,6 +205,16 @@ function AssetTable({
   );
 }
 
+function stripToken(url: string): string {
+  return url.replace(/[?&]token=[^&]*/, "");
+}
+
+function tokenExpiresSoon(url: string, marginSeconds = 15 * 60): boolean {
+  const match = /[?&]token=(\d+)\./.exec(url);
+  if (!match) return false;
+  return Number(match[1]) <= Date.now() / 1000 + marginSeconds;
+}
+
 function AssetDrawer({
   asset,
   projects,
@@ -221,7 +231,15 @@ function AssetDrawer({
   useEffect(() => setSelectedRenderId(asset.renders[0]?.id ?? null), [asset.id]);
   const selected: Render | undefined = asset.renders.find((render) => render.id === selectedRenderId) ?? asset.renders[0];
   const setSelected = (render: Render) => setSelectedRenderId(render.id);
-  const videoSrc = useMemo(() => fileUrl(selected?.url) ?? undefined, [selected?.id]);
+  const [videoSrc, setVideoSrc] = useState<string | undefined>(fileUrl(selected?.url) ?? undefined);
+  useEffect(() => {
+    const next = fileUrl(selected?.url) ?? undefined;
+    setVideoSrc((current) => {
+      if (!current || !next) return next;
+      if (stripToken(current) !== stripToken(next)) return next;
+      return tokenExpiresSoon(current) ? next : current;
+    });
+  }, [selected?.id, selected?.url]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
@@ -372,6 +390,9 @@ export default function App() {
     async () => setAssets(await api<Asset[]>("/api/assets")),
     [],
   );
+  const refreshAssets = useCallback(async () => {
+    try { await loadAssets(); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to refresh clips; media links may be stale"); }
+  }, [loadAssets]);
   const loadJobs = async () => setJobs(await api<Job[]>("/api/jobs"));
   const loadHealth = async () => setHealth(await api<Health>("/api/health"));
   const reload = async () => { try { await Promise.all([loadProjects(), loadAssets(), loadJobs(), loadHealth()]); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to reach the service"); } };
@@ -379,5 +400,5 @@ export default function App() {
   const patchAsset = async (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => {
     try { const updated = await api<Asset>(`/api/assets/${asset.id}`, { method: "PATCH", body: JSON.stringify(patch) }); setAssets((current) => current.map((item) => item.id === updated.id ? updated : item)); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to update asset"); }
   };
-  return <AppShell screen={screen} setScreen={setScreen} projects={projects} assets={assets}>{error && <div className="global-error">{error}<button onClick={() => setError("")}>×</button></div>}{screen === "library" && <Library assets={assets} projects={projects} onPatch={patchAsset} reloadAssets={loadAssets} />}{screen === "jobs" && <Jobs jobs={jobs} projects={projects} reload={reload} />}{screen === "settings" && <SettingsPage health={health} refreshHealth={loadHealth} />}</AppShell>;
+  return <AppShell screen={screen} setScreen={setScreen} projects={projects} assets={assets}>{error && <div className="global-error">{error}<button onClick={() => setError("")}>×</button></div>}{screen === "library" && <Library assets={assets} projects={projects} onPatch={patchAsset} reloadAssets={refreshAssets} />}{screen === "jobs" && <Jobs jobs={jobs} projects={projects} reload={reload} />}{screen === "settings" && <SettingsPage health={health} refreshHealth={loadHealth} />}</AppShell>;
 }
