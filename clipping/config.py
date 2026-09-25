@@ -353,11 +353,20 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0.5,
         help="Vertical alignment for split-screen panels (0.0=top, 0.5=center, 1.0=bottom). Default is 0.5 (center).",
     )
-    p.add_argument(
+    split_auto_zoom_group = p.add_mutually_exclusive_group()
+    split_auto_zoom_group.add_argument(
         "--split-auto-zoom",
+        dest="split_auto_zoom",
         action="store_true",
         help="Automatically zoom in each split-screen panel until only one person is visible in each frame.",
     )
+    split_auto_zoom_group.add_argument(
+        "--no-split-auto-zoom",
+        dest="split_auto_zoom",
+        action="store_false",
+        help="Disable automatic per-panel zoom for split-screen rendering.",
+    )
+    p.set_defaults(split_auto_zoom=None)
     p.add_argument(
         "--split-max-zoom",
         type=float,
@@ -950,7 +959,11 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         switch_blend_duration=args.switch_blend_duration,
         split_zoom=args.split_zoom,
         split_v_align=args.split_v_align,
-        split_auto_zoom=args.split_auto_zoom,
+        split_auto_zoom=(
+            args.split_auto_zoom
+            if args.split_auto_zoom is not None
+            else bool(args.split_screen)
+        ),
         split_max_zoom=args.split_max_zoom,
         # Subtitle & Tipografi
         no_subs=args.no_subs,
