@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import threading
 import traceback
 from pathlib import Path
@@ -18,6 +19,55 @@ from .settings import Settings
 from .storage import LocalStorage, Storage
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _extract_thumbnail(video_path: str, out_path: str) -> str | None:
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                video_path,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        duration = float(probe.stdout.strip())
+        seek = min(1.0, max(0.0, duration / 2))
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(seek),
+                "-i",
+                video_path,
+                "-frames:v",
+                "1",
+                "-q:v",
+                "3",
+                out_path,
+            ],
+            check=False,
+            capture_output=True,
+        )
+    except (OSError, ValueError) as exc:
+        LOGGER.warning("Could not extract thumbnail for %s: %s", video_path, exc)
+        return None
+    if result.returncode != 0 or not os.path.isfile(out_path):
+        LOGGER.warning(
+            "Could not extract thumbnail for %s: %s",
+            video_path,
+            result.stderr.decode(errors="replace"),
+        )
+        return None
+    return out_path
 
 
 def _without_scenes(value: Any) -> Any:
@@ -68,11 +118,16 @@ def catalog_results(conn, storage: Storage, job: dict, results: list[dict]) -> l
             file_key = f"{job_id}/{slug}/clip_{clip_id}.mp4"
             storage.put(source_path, file_key)
             thumb_path = manifest.get("thumbnail_path")
-            if not thumb_path:
-                candidate = Path(source_path).with_name(
-                    f"thumbnail_{clip_id}.jpg"
+            if not thumb_path or not os.path.exists(thumb_path):
+                outputs_dir = Path(source_path).parent
+                if result.get("recipe_path"):
+                    outputs_dir = Path(result["recipe_path"]).parent
+                candidate = outputs_dir / f"thumbnail_{clip_id}.jpg"
+                thumb_path = (
+                    str(candidate)
+                    if candidate.exists()
+                    else _extract_thumbnail(source_path, str(candidate))
                 )
-                thumb_path = str(candidate) if candidate.exists() else None
             thumb_key = None
             if thumb_path and os.path.exists(thumb_path):
                 thumb_key = f"{job_id}/{slug}/thumbnail_{clip_id}.jpg"
