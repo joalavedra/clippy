@@ -7,6 +7,8 @@ Orchestrates the full clip generation pipeline.
 
 import json
 import os
+import shutil
+import subprocess
 
 from . import diarization as diarization_mod
 from . import engine, metadata, studio, hook_manager, voiceover
@@ -34,15 +36,45 @@ def run_pipeline(cfg) -> list[dict]:
         Render manifest (one dict per clip).
     """
 
-    # Step 1 — Download
+    # Step 1 — Download or stage a local file
     source_platform = getattr(cfg, "source_platform", "youtube")
-    engine.download_video(
-        cfg.url_youtube,
-        cfg.file_video_asli,
-        getattr(cfg, "use_dlp_subs", False),
-        getattr(cfg, "download_source_height", "max"),
-        source_platform=source_platform,
-    )
+    local_file = getattr(cfg, "local_file", None)
+    if local_file:
+        if not os.path.exists(local_file):
+            raise FileNotFoundError(f"Local input file not found: {local_file}")
+        source_platform = "local"
+        os.makedirs(os.path.dirname(cfg.file_video_asli), exist_ok=True)
+        if os.path.abspath(local_file) != os.path.abspath(cfg.file_video_asli):
+            if local_file.lower().endswith(".mp4"):
+                shutil.copy2(local_file, cfg.file_video_asli)
+            else:
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        local_file,
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "0:a?",
+                        "-c",
+                        "copy",
+                        cfg.file_video_asli,
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        print(f"✅ Local video siap: {cfg.file_video_asli}")
+    else:
+        engine.download_video(
+            cfg.url_youtube,
+            cfg.file_video_asli,
+            getattr(cfg, "use_dlp_subs", False),
+            getattr(cfg, "download_source_height", "max"),
+            source_platform=source_platform,
+        )
 
     # Step 2 — Transcribe
     transkrip_lengkap = ""
@@ -260,4 +292,3 @@ def run_pipeline(cfg) -> list[dict]:
 
 
     return render_manifest
-

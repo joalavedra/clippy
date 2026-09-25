@@ -198,9 +198,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # --- Pengaturan utama ---
+    input_group = p.add_mutually_exclusive_group()
+    input_group.add_argument(
+        "--url", "-u", default=None,
+        help="Video URL to process (supports YouTube, TikTok, Instagram, Google Drive).",
+    )
+    input_group.add_argument(
+        "--file",
+        default=None,
+        help="Local video file to process.",
+    )
     p.add_argument(
-        "--url", "-u", required=False, default=None,
-        help="Video URL to process (supports YouTube, TikTok, Instagram, Google Drive). Required unless --story-mode is used.",
+        "--output-dir",
+        default=None,
+        help="Output directory for normal pipeline results (default: ./outputs).",
     )
     p.add_argument(
         "--source",
@@ -423,6 +434,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--gemini-fallback-model",
         default=GEMINI_FALLBACK_MODEL,
         help="Gemini fallback model name if main model fails",
+    )
+    p.add_argument(
+        "--gemini-timeout",
+        type=float,
+        default=180,
+        help="Gemini request timeout in seconds.",
+    )
+    p.add_argument(
+        "--gemini-retry-wait",
+        type=float,
+        default=15,
+        help="Base Gemini retry wait in seconds.",
     )
     p.add_argument(
         "--load-gemini-json",
@@ -788,9 +811,13 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    # Validate: --url is required unless a non-URL mode is used
-    if not args.story_mode and not args.director and not args.url:
-        parser.error("--url is required unless --story-mode or --director is used.")
+    # Validate: a URL or local file is required unless a non-media mode is used
+    if not args.story_mode and not args.director and not (args.url or args.file):
+        parser.error("--url or --file is required unless --story-mode or --director is used.")
+    if args.gemini_timeout <= 0:
+        parser.error("--gemini-timeout must be greater than zero.")
+    if args.gemini_retry_wait < 0:
+        parser.error("--gemini-retry-wait must not be negative.")
     if args.target_min <= 0:
         parser.error("--target-min must be greater than zero.")
     if args.target_max < args.target_min:
@@ -819,7 +846,7 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
                 )
 
     base_dir = os.getcwd()
-    outputs_dir = os.path.abspath(os.path.join(base_dir, "outputs"))
+    outputs_dir = os.path.abspath(args.output_dir or os.path.join(base_dir, "outputs"))
     os.makedirs(outputs_dir, exist_ok=True)
     font_dir = os.path.abspath(os.path.join(base_dir, "custom_fonts"))
     os.makedirs(font_dir, exist_ok=True)
@@ -829,7 +856,8 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         base_dir=base_dir,
         outputs_dir=outputs_dir,
         font_dir=font_dir,
-        file_video_asli=os.path.abspath(os.path.join(base_dir, "video_asli.mp4")),
+        file_video_asli=os.path.abspath(os.path.join(outputs_dir, "video_asli.mp4")),
+        local_file=os.path.abspath(args.file) if args.file else None,
         file_font_thumbnail=os.path.abspath(
             os.path.join(base_dir, NAMA_FONT_THUMBNAIL)
         ),
@@ -848,7 +876,11 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         hf_token=os.environ.get("HF_TOKEN", ""),
         pexels_api_key=os.environ.get("PEXELS_API_KEY", ""),
         # Pengaturan utama
-        source_platform="tiktok" if args.tiktok else args.source,
+        source_platform=(
+            "local"
+            if args.file
+            else ("tiktok" if args.tiktok else args.source)
+        ),
         url_youtube=args.url,
         jumlah_clip=args.clips,
         pilihan_rasio=args.ratio,
@@ -917,6 +949,8 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         nvidia_model=args.nvidia_model,
         gemini_model=args.gemini_model,
         gemini_fallback_model=args.gemini_fallback_model,
+        gemini_timeout=args.gemini_timeout,
+        gemini_retry_wait=args.gemini_retry_wait,
         load_gemini_json=args.load_gemini_json,
         # Tracking Tuning
         track_step=args.track_step,

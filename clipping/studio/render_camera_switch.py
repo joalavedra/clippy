@@ -34,6 +34,7 @@ FIREFOX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101
 
 _helpers = _load_studio_internal_module("helpers.py", "clipping_studio_helpers")
 _ffmpeg_utils = _load_studio_internal_module("ffmpeg_utils.py", "clipping_studio_ffmpeg_utils")
+camera_path = _load_studio_internal_module("camera_path.py", "clipping_studio_camera_path")
 format_seconds = _helpers.format_seconds
 escape_ffmpeg_filter_value = _helpers.escape_ffmpeg_filter_value
 detect_video_encoder = _ffmpeg_utils.detect_video_encoder
@@ -379,8 +380,10 @@ def buat_video_camera_switch(
         for d in raw_list:
             face_cx = d["cx"]
             face_cy = d["cy"]
+            snapped = False
             if abs(face_cx - cam_cx) > snap_px:
                 cam_cx = face_cx
+                snapped = True
             else:
                 if face_cx > cam_cx + deadzone_px:
                     cam_cx += (face_cx - (cam_cx + deadzone_px)) * SMOOTH_FACTOR
@@ -394,36 +397,32 @@ def buat_video_camera_switch(
             target_zoom = _calc_target_zoom(d.get("dist", width))
             cam_zoom += (target_zoom - cam_zoom) * SMOOTH_FACTOR
             
-            smooth_list.append({"time": d["time"], "cx": cam_cx, "cy": cam_cy, "zoom": cam_zoom})
+            smooth_list.append(
+                {
+                    "time": d["time"],
+                    "cx": cam_cx,
+                    "cy": cam_cy,
+                    "zoom": cam_zoom,
+                    "snap": snapped,
+                }
+            )
         return smooth_list
 
     smooth: dict[str, list] = {
         spk: _smooth_positions_cs(raw_data[spk]) for spk in speakers
     }
+    for samples in smooth.values():
+        camera_path.mark_snaps(samples, width * SNAP_THRESHOLD)
+        camera_path.refine_snap_times(samples, cap, start_clip, orig_fps)
 
     def _get_pos_cs(speaker, t):
         sd = smooth.get(speaker, [])
-        if not sd:
-            return width / 2, height / 2, 1.0
-        if t <= sd[0]["time"]:
-            return sd[0]["cx"], sd[0]["cy"], sd[0]["zoom"]
-        if t >= sd[-1]["time"]:
-            return sd[-1]["cx"], sd[-1]["cy"], sd[-1]["zoom"]
-        for i in range(len(sd) - 1):
-            if sd[i]["time"] <= t <= sd[i + 1]["time"]:
-                t1, t2 = sd[i]["time"], sd[i + 1]["time"]
-                cx1, cx2 = sd[i]["cx"], sd[i + 1]["cx"]
-                cy1, cy2 = sd[i]["cy"], sd[i + 1]["cy"]
-                z1, z2 = sd[i]["zoom"], sd[i + 1]["zoom"]
-                if t1 == t2:
-                    return cx1, cy1, z1
-                frac = (t - t1) / (t2 - t1)
-                return (
-                    cx1 + (cx2 - cx1) * frac,
-                    cy1 + (cy2 - cy1) * frac,
-                    z1 + (z2 - z1) * frac
-                )
-        return width / 2, height / 2, 1.0
+        return camera_path.interp(
+            sd,
+            t,
+            keys=("cx", "cy", "zoom"),
+            defaults=(width / 2, height / 2, 1.0),
+        )
 
     # ----------------------------------------------------------------
     # Helper: blurred pillarbox for wide-shot / simultaneous speech
@@ -766,5 +765,4 @@ def buat_video_camera_switch(
         cap.release()
         for bc in broll_caps:
             bc["cap"].release()
-
 

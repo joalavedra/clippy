@@ -463,6 +463,8 @@ MAX_ATTEMPTS = 10
 INITIAL_WAIT_SECONDS = 60
 WAIT_INCREMENT_SECONDS = 30
 REQUEST_TIMEOUT_MS = 15 * 60 * 1000  # 15 menit
+DEFAULT_GEMINI_TIMEOUT_SECONDS = REQUEST_TIMEOUT_MS / 1000
+DEFAULT_GEMINI_RETRY_WAIT_SECONDS = 15
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
@@ -494,7 +496,14 @@ def _is_retryable(exc: Exception) -> bool:
     return any(k in msg for k in keywords)
 
 
-def _generate_json_with_retry(client, model, fallback_model, contents, config):
+def _generate_json_with_retry(
+    client,
+    model,
+    fallback_model,
+    contents,
+    config,
+    retry_wait_seconds=DEFAULT_GEMINI_RETRY_WAIT_SECONDS,
+):
     last_exc = None
     status_code = None
 
@@ -527,7 +536,9 @@ def _generate_json_with_retry(client, model, fallback_model, contents, config):
             if (not retryable) or attempt == MAX_ATTEMPTS:
                 break
 
-            wait_seconds = INITIAL_WAIT_SECONDS + ((attempt - 1) * WAIT_INCREMENT_SECONDS)
+            wait_seconds = retry_wait_seconds + (
+                attempt * retry_wait_seconds / 2
+            )
             print(f"[Gemini] Retry lagi dalam {wait_seconds} detik...")
             time.sleep(wait_seconds)
 
@@ -1200,7 +1211,10 @@ def analyze_with_gemini(
     client = genai.Client(
         api_key=cfg.api_key_gemini,
         http_options=types.HttpOptions(
-            timeout=REQUEST_TIMEOUT_MS,
+            timeout=int(
+                getattr(cfg, "gemini_timeout", DEFAULT_GEMINI_TIMEOUT_SECONDS)
+                * 1000
+            ),
             retry_options=types.HttpRetryOptions(attempts=1),
         ),
     )
@@ -1294,4 +1308,7 @@ def analyze_with_gemini(
         fallback_model=getattr(cfg, "gemini_fallback_model", None),
         contents=prompt,
         config=gemini_config,
+        retry_wait_seconds=getattr(
+            cfg, "gemini_retry_wait", DEFAULT_GEMINI_RETRY_WAIT_SECONDS
+        ),
     )

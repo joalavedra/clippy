@@ -70,7 +70,14 @@ def generate_recipe(
     client = genai.Client(
         api_key=cfg.api_key_gemini,
         http_options=types.HttpOptions(
-            timeout=engine.REQUEST_TIMEOUT_MS,
+            timeout=int(
+                getattr(
+                    cfg,
+                    "gemini_timeout",
+                    engine.DEFAULT_GEMINI_TIMEOUT_SECONDS,
+                )
+                * 1000
+            ),
             retry_options=types.HttpRetryOptions(attempts=1),
         ),
     )
@@ -84,6 +91,11 @@ def generate_recipe(
         fallback_model=getattr(cfg, "gemini_fallback_model", None),
         contents=prompt,
         config=gemini_config,
+        retry_wait_seconds=getattr(
+            cfg,
+            "gemini_retry_wait",
+            engine.DEFAULT_GEMINI_RETRY_WAIT_SECONDS,
+        ),
     )
 
     response_path = os.path.join(cfg.outputs_dir, "director_response.json")

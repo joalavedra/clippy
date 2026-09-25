@@ -34,6 +34,7 @@ FIREFOX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101
 
 _helpers = _load_studio_internal_module("helpers.py", "clipping_studio_helpers")
 _ffmpeg_utils = _load_studio_internal_module("ffmpeg_utils.py", "clipping_studio_ffmpeg_utils")
+camera_path = _load_studio_internal_module("camera_path.py", "clipping_studio_camera_path")
 format_seconds = _helpers.format_seconds
 escape_ffmpeg_filter_value = _helpers.escape_ffmpeg_filter_value
 detect_video_encoder = _ffmpeg_utils.detect_video_encoder
@@ -219,6 +220,7 @@ def buat_video_hybrid(
                 "cx": center_x if face_box else default_cx,
                 "cy": center_y if face_box else default_cy,
                 "box": face_box,
+                "detected": bool(face_box),
             }
         )
 
@@ -245,13 +247,36 @@ def buat_video_hybrid(
         # Consistent aggressive snapping for wide-to-tight camera cuts in standard clips
         temp_snap = SNAP_THRESHOLD if SNAP_THRESHOLD < 0.1 else 0.08
         snap_px = width * temp_snap
+        consecutive_misses = 0
 
         for d in raw_data:
-            face_cx = d["cx"]
-            face_cy = d["cy"]
+            force_glide = False
+            if not d.get("detected", False):
+                consecutive_misses += 1
+                if consecutive_misses <= 4:
+                    smooth_data.append(
+                        {
+                            "time": d["time"],
+                            "cx": cam_cx,
+                            "cy": cam_cy,
+                            "snap": False,
+                        }
+                    )
+                    continue
+                face_cx = default_cx
+                face_cy = default_cy
+                force_glide = True
+            else:
+                consecutive_misses = 0
+                face_cx = d["cx"]
+                face_cy = d["cy"]
 
-            if abs(face_cx - cam_cx) > snap_px:
+            snapped = False
+            if force_glide:
+                cam_cx += (face_cx - cam_cx) * SMOOTH_FACTOR
+            elif abs(face_cx - cam_cx) > snap_px:
                 cam_cx = face_cx
+                snapped = True
             else:
                 if face_cx > cam_cx + deadzone_px:
                     cam_cx += (face_cx - (cam_cx + deadzone_px)) * SMOOTH_FACTOR
@@ -261,22 +286,22 @@ def buat_video_hybrid(
             # Vertical smoothing
             cam_cy += (face_cy - cam_cy) * SMOOTH_FACTOR
 
-            smooth_data.append({"time": d["time"], "cx": cam_cx, "cy": cam_cy})
+            smooth_data.append(
+                {
+                    "time": d["time"],
+                    "cx": cam_cx,
+                    "cy": cam_cy,
+                    "snap": snapped,
+                }
+            )
+
+        camera_path.mark_snaps(smooth_data, snap_px)
+        camera_path.refine_snap_times(smooth_data, cap, start_clip, orig_fps)
 
     def get_x(t):
-        if not smooth_data:
-            return default_cx
-        if t <= smooth_data[0]["time"]:
-            return smooth_data[0]["cx"]
-        if t >= smooth_data[-1]["time"]:
-            return smooth_data[-1]["cx"]
-        for i in range(len(smooth_data) - 1):
-            if smooth_data[i]["time"] <= t <= smooth_data[i + 1]["time"]:
-                t1, t2 = smooth_data[i]["time"], smooth_data[i + 1]["time"]
-                cx1, cx2 = smooth_data[i]["cx"], smooth_data[i + 1]["cx"]
-                if t1 == t2: return cx1
-                return cx1 + (cx2 - cx1) * (t - t1) / (t2 - t1)
-        return default_cx
+        return camera_path.interp(
+            smooth_data, t, keys=("cx",), defaults=(default_cx,)
+        )[0]
 
     def get_box(t):
         if not raw_data:
@@ -291,26 +316,12 @@ def buat_video_hybrid(
         return None
 
     def _get_pos(t):
-        if not smooth_data:
-            return default_cx, default_cy
-        if t <= smooth_data[0]["time"]:
-            return smooth_data[0]["cx"], smooth_data[0]["cy"]
-        if t >= smooth_data[-1]["time"]:
-            return smooth_data[-1]["cx"], smooth_data[-1]["cy"]
-
-        for i in range(len(smooth_data) - 1):
-            if smooth_data[i]["time"] <= t <= smooth_data[i + 1]["time"]:
-                t1, t2 = smooth_data[i]["time"], smooth_data[i + 1]["time"]
-                cx1, cx2 = smooth_data[i]["cx"], smooth_data[i + 1]["cx"]
-                cy1, cy2 = smooth_data[i]["cy"], smooth_data[i + 1]["cy"]
-                if t1 == t2:
-                    return cx1, cy1
-                frac = (t - t1) / (t2 - t1)
-                return (
-                    cx1 + (cx2 - cx1) * frac,
-                    cy1 + (cy2 - cy1) * frac
-                )
-        return default_cx, default_cy
+        return camera_path.interp(
+            smooth_data,
+            t,
+            keys=("cx", "cy"),
+            defaults=(default_cx, default_cy),
+        )
 
     def format_seconds(s):
         mins = int(s) // 60
@@ -529,5 +540,3 @@ def buat_video_hybrid(
             bc["cap"].release()
             
     return get_x
-
-
