@@ -16,6 +16,7 @@ from types import SimpleNamespace
 # ==============================================================================
 
 SUPPORTED_PLATFORMS = {"youtube", "tiktok", "instagram", "gdrive", "local"}
+SUPPORTED_LAYOUTS = {"single", "podcast"}
 
 _REQUIRED_SOURCE_FIELDS = {"id", "name", "platform"}
 _REQUIRED_CLIP_FIELDS = {"clip_id", "title", "hook", "highlight"}
@@ -73,6 +74,14 @@ def load_sources(path: str) -> dict[str, dict]:
 
         sid = src["id"]
         platform = src["platform"]
+        layout = src.get("layout", "single")
+
+        if layout not in SUPPORTED_LAYOUTS:
+            raise ValueError(
+                f"Source '{sid}': layout '{layout}' tidak dikenal. "
+                f"Pilih dari: {SUPPORTED_LAYOUTS}"
+            )
+        src["layout"] = layout
 
         if platform not in SUPPORTED_PLATFORMS:
             raise ValueError(

@@ -40,6 +40,11 @@ python main.py --story-mode \
 
 This file is responsible for registering all raw links to be used.
 - Must have `id`, `name`, `url`, and `platform` (supports `youtube`, `tiktok`, `instagram`, `gdrive`, or `local`).
+- Optional `layout` selects styled rendering: `single` (default) or `podcast` for two-speaker split-screen scenes.
+
+| Field | Values | Description |
+|---|---|---|
+| `layout` | `single` / `podcast` | Optional source layout; `podcast` routes vertical styled scenes through dynamic split-screen rendering. |
 
 **Example:**
 ```json
@@ -50,7 +55,8 @@ This file is responsible for registering all raw links to be used.
       "id": "velia_2",
       "name": "Velia Video 2",
       "url": "https://www.tiktok.com/@veliachristyy/video/761675...",
-      "platform": "tiktok"
+      "platform": "tiktok",
+      "layout": "single"
     }
   ]
 }

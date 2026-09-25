@@ -105,6 +105,40 @@ def _transcribe_sources(
     return transcripts
 
 
+def _prepare_source_cache(
+    source_registry: dict[str, dict],
+    cfg,
+    cache_dir: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Download or resolve Story sources and save their status."""
+    cache_dir = cache_dir or source_manager.get_cache_dir(cfg.outputs_dir)
+    skip_download = getattr(cfg, "skip_download", False)
+
+    if skip_download:
+        print("\n[2/6] ⏩ Skip download (--skip-download aktif)")
+        cached_paths = {}
+        for sid, src in source_registry.items():
+            if src["platform"] == "local":
+                cached_paths[sid] = src["local_path"]
+            else:
+                cached = os.path.join(cache_dir, f"{sid}.mp4")
+                if os.path.exists(cached):
+                    cached_paths[sid] = cached
+                else:
+                    print(f"   ⚠️ Cache tidak ditemukan untuk '{sid}': {cached}")
+    else:
+        print(f"\n[2/6] Downloading sources → {cache_dir}")
+        download_height = getattr(cfg, "download_source_height", "max")
+        cached_paths = source_manager.download_all_sources(
+            source_registry, cache_dir, download_height
+        )
+
+    source_manager.save_sources_status(
+        source_registry, cached_paths, cfg.outputs_dir
+    )
+    return cache_dir, cached_paths
+
+
 # ==============================================================================
 # MAIN PIPELINE
 # ==============================================================================
@@ -140,31 +174,7 @@ def run_story_pipeline(cfg) -> list[dict]:
     # ------------------------------------------------------------------
     # Step 2 — Download & cache all sources
     # ------------------------------------------------------------------
-    skip_download = getattr(cfg, "skip_download", False)
-    cache_dir = source_manager.get_cache_dir(cfg.outputs_dir)
-
-    if skip_download:
-        print("\n[2/6] ⏩ Skip download (--skip-download aktif)")
-        # Build paths from existing cache
-        cached_paths = {}
-        for sid, src in source_registry.items():
-            if src["platform"] == "local":
-                cached_paths[sid] = src["local_path"]
-            else:
-                cached = os.path.join(cache_dir, f"{sid}.mp4")
-                if os.path.exists(cached):
-                    cached_paths[sid] = cached
-                else:
-                    print(f"   ⚠️ Cache tidak ditemukan untuk '{sid}': {cached}")
-    else:
-        print(f"\n[2/6] Downloading sources → {cache_dir}")
-        download_height = getattr(cfg, "download_source_height", "max")
-        cached_paths = source_manager.download_all_sources(
-            source_registry, cache_dir, download_height
-        )
-
-    # Save download status
-    source_manager.save_sources_status(source_registry, cached_paths, cfg.outputs_dir)
+    cache_dir, cached_paths = _prepare_source_cache(source_registry, cfg)
 
     # ------------------------------------------------------------------
     # Step 3 — Transcribe each source with Whisper
@@ -181,7 +191,7 @@ def run_story_pipeline(cfg) -> list[dict]:
     recipe = loader.load_recipe(recipe_path, source_registry)
 
     # ------------------------------------------------------------------
-    # Step 5 — Assemble each clip (clean, no subs, no text overlay)
+    # Step 5 — Assemble each clip
     # ------------------------------------------------------------------
     clips = recipe.get("clips", [])
     defaults = recipe.get("_defaults", None)
@@ -196,7 +206,20 @@ def run_story_pipeline(cfg) -> list[dict]:
     print(f"\n[5/6] Assembling {len(clips)} clip(s)...")
     print(f"   Output dir: {story_output_dir}")
     print(f"   Ratio: {ratio}")
-    print(f"   Mode: kosongan (no subs, no text overlay)")
+    style = getattr(cfg, "story_style", None) or "clean"
+    print(f"   Mode: {style}")
+
+    styled_renderer = None
+    video_encoder = None
+    if style == "styled":
+        from .story import styled_render
+        from . import studio
+
+        print("   Preparing styled renderer fonts and encoder...")
+        studio.siapkan_font_tipografi(cfg)
+        target_h = studio._get_render_dims(cfg, ratio)[1]
+        video_encoder = studio.detect_video_encoder(cfg, target_h=target_h)
+        styled_renderer = styled_render
 
     manifest: list[dict] = []
 
@@ -211,29 +234,43 @@ def run_story_pipeline(cfg) -> list[dict]:
         clip_dir = os.path.join(story_output_dir, f"clip_{cid}")
         os.makedirs(clip_dir, exist_ok=True)
 
-        # --- Assemble Hook (clean) ---
-        hook_path = assembler.assemble_hook(
-            clip_config=clip_config,
-            source_registry=source_registry,
-            cache_dir=cache_dir,
-            output_dir=clip_dir,
-            ratio=ratio,
-        )
-
-        # --- Assemble Highlight (clean) ---
-        highlight_path = assembler.assemble_highlight(
-            clip_config=clip_config,
-            source_registry=source_registry,
-            cache_dir=cache_dir,
-            output_dir=clip_dir,
-            ratio=ratio,
-        )
+        if style == "styled":
+            rendered = styled_renderer.render_clip_styled(
+                clip_config=clip_config,
+                source_registry=source_registry,
+                cache_dir=cache_dir,
+                transcripts=transcripts,
+                ratio=ratio,
+                cfg=cfg,
+                video_encoder=video_encoder,
+                output_dir=clip_dir,
+            )
+            hook_path = rendered["hook_path"]
+            highlight_path = rendered["highlight_path"]
+            final_path = rendered["final_path"]
+        else:
+            hook_path = assembler.assemble_hook(
+                clip_config=clip_config,
+                source_registry=source_registry,
+                cache_dir=cache_dir,
+                output_dir=clip_dir,
+                ratio=ratio,
+            )
+            highlight_path = assembler.assemble_highlight(
+                clip_config=clip_config,
+                source_registry=source_registry,
+                cache_dir=cache_dir,
+                output_dir=clip_dir,
+                ratio=ratio,
+            )
+            final_path = None
 
         entry = {
             "clip_id": cid,
             "title": title,
             "hook_path": hook_path,
             "highlight_path": highlight_path,
+            "final_path": final_path,
             "status": "ok" if (hook_path and highlight_path) else "partial",
             "metadata": clip_config.get("metadata", {}),
         }
@@ -274,4 +311,3 @@ def run_story_pipeline(cfg) -> list[dict]:
         print(f"  {entry['clip_id']:>4} | {title_short:<35} | {hook_ok:>6} | {hl_ok:>10} | {entry['status']}")
 
     return manifest
-

@@ -163,8 +163,14 @@ pip install -r requirements.txt          # pip / Colab
 cp .env.sample .env
 # Edit .env and add your GOOGLE_API_KEY
 
-# 4. Run (Must include --url)
+# 4. Run from a URL or local file
 python main.py --url "https://youtube.com/watch?v=VIDEO_ID"
+
+# Local input (outputs are written under ./outputs by default)
+python main.py --file "/path/to/video.mp4"
+
+# Choose a different output directory
+python main.py --file "/path/to/video.mp4" --output-dir "/path/to/results"
 # 5. Examples of Execution
 
 # Standard run (Default options with 5 clips)
@@ -248,7 +254,9 @@ python main.py --help
 
 | Argument | Default | Description |
 |---|---|---|
-| `--url`, `-u` | — | Video URL to process (Required) |
+| `--url`, `-u` | — | Video URL to process (mutually exclusive with `--file`) |
+| `--file` | — | Local video file to process (mutually exclusive with `--url`) |
+| `--output-dir` | `./outputs` | Output directory for normal pipeline results |
 | `--source` | `youtube` | Video source platform. Choices: `youtube`, `tiktok`, `instagram`, `gdrive`. |
 | `--clips`, `-n` | `7` | Number of highlight clips to generate |
 | `--ratio`, `-r` | `9:16` | Output aspect ratio (`9:16`, `16:9`, `1:1`, `3:4`, `4:5`) |
@@ -299,6 +307,8 @@ python main.py --help
 | `--whisper-compute-type` | `float16` | Compute type for Whisper (`float32`, `float16`, `int8`, etc.) |
 | `--gemini-model` | `gemini-3-flash-preview` | Gemini model name |
 | `--gemini-fallback-model` | `gemini-2.5-flash` | Gemini fallback model name if main model fails |
+| `--gemini-timeout` | `180` | Gemini request timeout in seconds |
+| `--gemini-retry-wait` | `15` | Base wait in seconds between retry attempts |
 | `--load-gemini-json` | `False` | Load the saved `gemini_response.json` from the output directory to bypass the Gemini API call |
 | `--split-screen` | `False` | Enable split-screen mode for podcasts (9:16 only, requires `HF_TOKEN`). Supports 3+ speakers across multiple scenes |
 | `--dynamic-split` | `False` | Automatically switch between full-screen and split-screen based on activity (requires `--split-screen`) |

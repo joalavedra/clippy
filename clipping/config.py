@@ -6,6 +6,7 @@ Menyimpan semua default value dan membangun config dari CLI args.
 
 import argparse
 import os
+import re
 from types import SimpleNamespace
 
 try:
@@ -25,6 +26,7 @@ FONT_DIR = os.path.abspath(os.path.join(BASE_DIR, "custom_fonts"))
 # 1. PENGATURAN UTAMA
 JUMLAH_CLIP = 7
 PILIHAN_RASIO = "9:16"
+DIRECTOR_FORMAT_RATIOS = {"9:16", "16:9", "1:1", "3:4", "4:5"}
 
 # 2. PENGATURAN KONTEN & HOOK
 MAX_KATA_PER_SUBTITLE = 5
@@ -198,9 +200,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # --- Pengaturan utama ---
+    input_group = p.add_mutually_exclusive_group()
+    input_group.add_argument(
+        "--url", "-u", default=None,
+        help="Video URL to process (supports YouTube, TikTok, Instagram, Google Drive).",
+    )
+    input_group.add_argument(
+        "--file",
+        default=None,
+        help="Local video file to process.",
+    )
     p.add_argument(
-        "--url", "-u", required=False, default=None,
-        help="Video URL to process (supports YouTube, TikTok, Instagram, Google Drive). Required unless --story-mode is used.",
+        "--output-dir",
+        default=None,
+        help="Output directory for normal pipeline results (default: ./outputs).",
     )
     p.add_argument(
         "--source",
@@ -340,11 +353,20 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0.5,
         help="Vertical alignment for split-screen panels (0.0=top, 0.5=center, 1.0=bottom). Default is 0.5 (center).",
     )
-    p.add_argument(
+    split_auto_zoom_group = p.add_mutually_exclusive_group()
+    split_auto_zoom_group.add_argument(
         "--split-auto-zoom",
+        dest="split_auto_zoom",
         action="store_true",
         help="Automatically zoom in each split-screen panel until only one person is visible in each frame.",
     )
+    split_auto_zoom_group.add_argument(
+        "--no-split-auto-zoom",
+        dest="split_auto_zoom",
+        action="store_false",
+        help="Disable automatic per-panel zoom for split-screen rendering.",
+    )
+    p.set_defaults(split_auto_zoom=None)
     p.add_argument(
         "--split-max-zoom",
         type=float,
@@ -423,6 +445,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--gemini-fallback-model",
         default=GEMINI_FALLBACK_MODEL,
         help="Gemini fallback model name if main model fails",
+    )
+    p.add_argument(
+        "--gemini-timeout",
+        type=float,
+        default=180,
+        help="Gemini request timeout in seconds.",
+    )
+    p.add_argument(
+        "--gemini-retry-wait",
+        type=float,
+        default=15,
+        help="Base Gemini retry wait in seconds.",
     )
     p.add_argument(
         "--load-gemini-json",
@@ -616,6 +650,62 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Skip source downloads and use existing cached files.",
     )
+    story_group.add_argument(
+        "--story-style",
+        choices=["clean", "styled"],
+        default=None,
+        help="Story render style. Director defaults to styled; Story mode defaults to clean.",
+    )
+
+    # --- Director Stage ---
+    director_group = p.add_argument_group("Director Stage")
+    director_group.add_argument(
+        "--director",
+        action="store_true",
+        default=False,
+        help="Generate a Story recipe from source transcripts and a creative brief.",
+    )
+    director_group.add_argument(
+        "--brief",
+        default="",
+        help="Creative brief for the director stage.",
+    )
+    director_group.add_argument(
+        "--target-min",
+        type=float,
+        default=10,
+        help="Target minimum total clip duration in seconds.",
+    )
+    director_group.add_argument(
+        "--target-max",
+        type=float,
+        default=30,
+        help="Target maximum total clip duration in seconds.",
+    )
+    director_group.add_argument(
+        "--formats",
+        default=None,
+        help=(
+            "Director formats as comma-separated SPEC values, "
+            "for example 16:9/20-30,9:16/8-12."
+        ),
+    )
+    director_group.add_argument(
+        "--director-recipe-out",
+        default="outputs/director_recipe.json",
+        help="Output path for the validated director recipe.",
+    )
+    director_group.add_argument(
+        "--director-dry-run",
+        action="store_true",
+        default=False,
+        help="Generate and validate the director recipe without rendering Story clips.",
+    )
+    director_group.add_argument(
+        "--project-name",
+        default="Director Story",
+        help="Project name written to the generated story recipe.",
+    )
 
     # --- Voice-Over Commentary Pipeline ---
     vo_group = p.add_argument_group("Voice-Over Commentary (TTS)")
@@ -740,9 +830,46 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    # Validate: --url is required unless --story-mode is used
-    if not args.story_mode and not args.url:
-        parser.error("--url is required unless --story-mode is used.")
+    # Validate: a URL or local file is required unless a non-media mode is used
+    if not args.story_mode and not args.director and not (args.url or args.file):
+        parser.error("--url or --file is required unless --story-mode or --director is used.")
+    if args.gemini_timeout <= 0:
+        parser.error("--gemini-timeout must be greater than zero.")
+    if args.gemini_retry_wait < 0:
+        parser.error("--gemini-retry-wait must not be negative.")
+    if args.target_min <= 0:
+        parser.error("--target-min must be greater than zero.")
+    if args.target_max < args.target_min:
+        parser.error("--target-max must be greater than or equal to --target-min.")
+    formats = None
+    if args.formats:
+        if not args.director:
+            parser.error("--formats is only valid with --director.")
+        formats = []
+        for raw_spec in args.formats.split(","):
+            spec = raw_spec.strip()
+            match = re.fullmatch(
+                r"([^/]+)/([0-9]+(?:\.[0-9]+)?)-([0-9]+(?:\.[0-9]+)?)",
+                spec,
+            )
+            if not match:
+                parser.error(
+                    f"Invalid --formats value '{spec}'. "
+                    "Expected <ratio>/<min>-<max>."
+                )
+            ratio, min_text, max_text = match.groups()
+            if ratio not in DIRECTOR_FORMAT_RATIOS:
+                parser.error(
+                    f"Invalid director format ratio '{ratio}'. "
+                    f"Choose from: {', '.join(sorted(DIRECTOR_FORMAT_RATIOS))}."
+                )
+            min_duration = float(min_text)
+            max_duration = float(max_text)
+            if min_duration <= 0 or max_duration < min_duration:
+                parser.error(
+                    f"Invalid duration range for --formats '{spec}'."
+                )
+            formats.append((ratio, min_duration, max_duration))
 
     # Validate watermark args
     if args.watermark:
@@ -767,7 +894,7 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
                 )
 
     base_dir = os.getcwd()
-    outputs_dir = os.path.abspath(os.path.join(base_dir, "outputs"))
+    outputs_dir = os.path.abspath(args.output_dir or os.path.join(base_dir, "outputs"))
     os.makedirs(outputs_dir, exist_ok=True)
     font_dir = os.path.abspath(os.path.join(base_dir, "custom_fonts"))
     os.makedirs(font_dir, exist_ok=True)
@@ -777,7 +904,8 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         base_dir=base_dir,
         outputs_dir=outputs_dir,
         font_dir=font_dir,
-        file_video_asli=os.path.abspath(os.path.join(base_dir, "video_asli.mp4")),
+        file_video_asli=os.path.abspath(os.path.join(outputs_dir, "video_asli.mp4")),
+        local_file=os.path.abspath(args.file) if args.file else None,
         file_font_thumbnail=os.path.abspath(
             os.path.join(base_dir, NAMA_FONT_THUMBNAIL)
         ),
@@ -796,7 +924,11 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         hf_token=os.environ.get("HF_TOKEN", ""),
         pexels_api_key=os.environ.get("PEXELS_API_KEY", ""),
         # Pengaturan utama
-        source_platform="tiktok" if args.tiktok else args.source,
+        source_platform=(
+            "local"
+            if args.file
+            else ("tiktok" if args.tiktok else args.source)
+        ),
         url_youtube=args.url,
         jumlah_clip=args.clips,
         pilihan_rasio=args.ratio,
@@ -827,7 +959,11 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         switch_blend_duration=args.switch_blend_duration,
         split_zoom=args.split_zoom,
         split_v_align=args.split_v_align,
-        split_auto_zoom=args.split_auto_zoom,
+        split_auto_zoom=(
+            args.split_auto_zoom
+            if args.split_auto_zoom is not None
+            else bool(args.split_screen)
+        ),
         split_max_zoom=args.split_max_zoom,
         # Subtitle & Tipografi
         no_subs=args.no_subs,
@@ -865,6 +1001,8 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         nvidia_model=args.nvidia_model,
         gemini_model=args.gemini_model,
         gemini_fallback_model=args.gemini_fallback_model,
+        gemini_timeout=args.gemini_timeout,
+        gemini_retry_wait=args.gemini_retry_wait,
         load_gemini_json=args.load_gemini_json,
         # Tracking Tuning
         track_step=args.track_step,
@@ -898,6 +1036,16 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
             else os.path.join(outputs_dir, "story_clips")
         ),
         skip_download=args.skip_download,
+        story_style=args.story_style,
+        # Director Stage
+        director=args.director,
+        brief=args.brief,
+        target_min=args.target_min,
+        target_max=args.target_max,
+        formats=formats,
+        director_recipe_out=os.path.abspath(args.director_recipe_out),
+        director_dry_run=args.director_dry_run,
+        project_name=args.project_name,
         # Voice-Over Commentary
         voiceover=args.voiceover,
         voiceover_voice=args.voiceover_voice,
