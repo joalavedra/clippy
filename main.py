@@ -18,6 +18,25 @@ def main():
 
     version = "1.12.0"
 
+    # ── Director Stage ────────────────────────────────────────────────
+    if getattr(cfg, "director", False):
+        from clipping.director import run_director
+
+        print("=" * 70)
+        print(f"🎬 OpenSource Clipping v{version} — Director Stage")
+        print("=" * 70)
+        print(f"   Sources     : {cfg.sources_json_path}")
+        print(f"   Brief       : {cfg.brief}")
+        print(f"   Clips       : {cfg.jumlah_clip}")
+        print(f"   Ratio       : {cfg.pilihan_rasio}")
+        print(f"   Output Dir  : {cfg.story_output_dir}")
+        print(f"   Recipe Out  : {cfg.director_recipe_out}")
+        print(f"   Dry Run     : {'YES' if cfg.director_dry_run else 'NO'}")
+        print("=" * 70)
+
+        run_director(cfg)
+        return
+
     # ── Story Clip Mode ──────────────────────────────────────────────
     if getattr(cfg, "story_mode", False):
         from clipping.story_runner import run_story_pipeline

@@ -105,6 +105,40 @@ def _transcribe_sources(
     return transcripts
 
 
+def _prepare_source_cache(
+    source_registry: dict[str, dict],
+    cfg,
+    cache_dir: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Download or resolve Story sources and save their status."""
+    cache_dir = cache_dir or source_manager.get_cache_dir(cfg.outputs_dir)
+    skip_download = getattr(cfg, "skip_download", False)
+
+    if skip_download:
+        print("\n[2/6] ⏩ Skip download (--skip-download aktif)")
+        cached_paths = {}
+        for sid, src in source_registry.items():
+            if src["platform"] == "local":
+                cached_paths[sid] = src["local_path"]
+            else:
+                cached = os.path.join(cache_dir, f"{sid}.mp4")
+                if os.path.exists(cached):
+                    cached_paths[sid] = cached
+                else:
+                    print(f"   ⚠️ Cache tidak ditemukan untuk '{sid}': {cached}")
+    else:
+        print(f"\n[2/6] Downloading sources → {cache_dir}")
+        download_height = getattr(cfg, "download_source_height", "max")
+        cached_paths = source_manager.download_all_sources(
+            source_registry, cache_dir, download_height
+        )
+
+    source_manager.save_sources_status(
+        source_registry, cached_paths, cfg.outputs_dir
+    )
+    return cache_dir, cached_paths
+
+
 # ==============================================================================
 # MAIN PIPELINE
 # ==============================================================================
@@ -140,31 +174,7 @@ def run_story_pipeline(cfg) -> list[dict]:
     # ------------------------------------------------------------------
     # Step 2 — Download & cache all sources
     # ------------------------------------------------------------------
-    skip_download = getattr(cfg, "skip_download", False)
-    cache_dir = source_manager.get_cache_dir(cfg.outputs_dir)
-
-    if skip_download:
-        print("\n[2/6] ⏩ Skip download (--skip-download aktif)")
-        # Build paths from existing cache
-        cached_paths = {}
-        for sid, src in source_registry.items():
-            if src["platform"] == "local":
-                cached_paths[sid] = src["local_path"]
-            else:
-                cached = os.path.join(cache_dir, f"{sid}.mp4")
-                if os.path.exists(cached):
-                    cached_paths[sid] = cached
-                else:
-                    print(f"   ⚠️ Cache tidak ditemukan untuk '{sid}': {cached}")
-    else:
-        print(f"\n[2/6] Downloading sources → {cache_dir}")
-        download_height = getattr(cfg, "download_source_height", "max")
-        cached_paths = source_manager.download_all_sources(
-            source_registry, cache_dir, download_height
-        )
-
-    # Save download status
-    source_manager.save_sources_status(source_registry, cached_paths, cfg.outputs_dir)
+    cache_dir, cached_paths = _prepare_source_cache(source_registry, cfg)
 
     # ------------------------------------------------------------------
     # Step 3 — Transcribe each source with Whisper
@@ -274,4 +284,3 @@ def run_story_pipeline(cfg) -> list[dict]:
         print(f"  {entry['clip_id']:>4} | {title_short:<35} | {hook_ok:>6} | {hl_ok:>10} | {entry['status']}")
 
     return manifest
-

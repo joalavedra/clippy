@@ -617,6 +617,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip source downloads and use existing cached files.",
     )
 
+    # --- Director Stage ---
+    director_group = p.add_argument_group("Director Stage")
+    director_group.add_argument(
+        "--director",
+        action="store_true",
+        default=False,
+        help="Generate a Story recipe from source transcripts and a creative brief.",
+    )
+    director_group.add_argument(
+        "--brief",
+        default="",
+        help="Creative brief for the director stage.",
+    )
+    director_group.add_argument(
+        "--target-min",
+        type=float,
+        default=10,
+        help="Target minimum total clip duration in seconds.",
+    )
+    director_group.add_argument(
+        "--target-max",
+        type=float,
+        default=30,
+        help="Target maximum total clip duration in seconds.",
+    )
+    director_group.add_argument(
+        "--director-recipe-out",
+        default="outputs/director_recipe.json",
+        help="Output path for the validated director recipe.",
+    )
+    director_group.add_argument(
+        "--director-dry-run",
+        action="store_true",
+        default=False,
+        help="Generate and validate the director recipe without rendering Story clips.",
+    )
+    director_group.add_argument(
+        "--project-name",
+        default="Director Story",
+        help="Project name written to the generated story recipe.",
+    )
+
     # --- Voice-Over Commentary Pipeline ---
     vo_group = p.add_argument_group("Voice-Over Commentary (TTS)")
     vo_group.add_argument(
@@ -740,9 +782,13 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    # Validate: --url is required unless --story-mode is used
-    if not args.story_mode and not args.url:
-        parser.error("--url is required unless --story-mode is used.")
+    # Validate: --url is required unless a non-URL mode is used
+    if not args.story_mode and not args.director and not args.url:
+        parser.error("--url is required unless --story-mode or --director is used.")
+    if args.target_min <= 0:
+        parser.error("--target-min must be greater than zero.")
+    if args.target_max < args.target_min:
+        parser.error("--target-max must be greater than or equal to --target-min.")
 
     # Validate watermark args
     if args.watermark:
@@ -898,6 +944,14 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
             else os.path.join(outputs_dir, "story_clips")
         ),
         skip_download=args.skip_download,
+        # Director Stage
+        director=args.director,
+        brief=args.brief,
+        target_min=args.target_min,
+        target_max=args.target_max,
+        director_recipe_out=os.path.abspath(args.director_recipe_out),
+        director_dry_run=args.director_dry_run,
+        project_name=args.project_name,
         # Voice-Over Commentary
         voiceover=args.voiceover,
         voiceover_voice=args.voiceover_voice,
