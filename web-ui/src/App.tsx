@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, fileUrl, ApiError } from "./api";
 import type {
@@ -250,7 +250,7 @@ function CopyBlock({ label, value, onCopy }: { label: string; value: string; onC
   return <div className="copy-block"><div className="block-label">{label}<button className="copy-button" onClick={() => onCopy(value)}>Copy</button></div><p>{value}</p></div>;
 }
 
-function Library({ assets, projects, onPatch }: { assets: Asset[]; projects: Project[]; onPatch: (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => void }) {
+function Library({ assets, projects, onPatch, reloadAssets }: { assets: Asset[]; projects: Project[]; onPatch: (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => void; reloadAssets: () => Promise<void> }) {
   const [project, setProject] = useState("");
   const [ratio, setRatio] = useState("");
   const [score, setScore] = useState("");
@@ -259,6 +259,18 @@ function Library({ assets, projects, onPatch }: { assets: Asset[]; projects: Pro
   const [search, setSearch] = useState("");
   const [view, setView] = useState<ViewMode>("cards");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (selectedId) void reloadAssets();
+  }, [selectedId, reloadAssets]);
+  useEffect(() => {
+    const refresh = () => void reloadAssets();
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 10 * 60 * 1000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
+  }, [reloadAssets]);
   const filtered = useMemo(() => assets.filter((asset) => {
     const text = `${asset.title} ${asset.hook_line}`.toLowerCase();
     return (!project || asset.project_ids.includes(project))
@@ -353,7 +365,10 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState("");
   const loadProjects = async () => setProjects(await api<Project[]>("/api/projects"));
-  const loadAssets = async () => setAssets(await api<Asset[]>("/api/assets"));
+  const loadAssets = useCallback(
+    async () => setAssets(await api<Asset[]>("/api/assets")),
+    [],
+  );
   const loadJobs = async () => setJobs(await api<Job[]>("/api/jobs"));
   const loadHealth = async () => setHealth(await api<Health>("/api/health"));
   const reload = async () => { try { await Promise.all([loadProjects(), loadAssets(), loadJobs(), loadHealth()]); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to reach the service"); } };
@@ -361,5 +376,5 @@ export default function App() {
   const patchAsset = async (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => {
     try { const updated = await api<Asset>(`/api/assets/${asset.id}`, { method: "PATCH", body: JSON.stringify(patch) }); setAssets((current) => current.map((item) => item.id === updated.id ? updated : item)); } catch (caught) { setError(caught instanceof ApiError ? caught.detail : "Unable to update asset"); }
   };
-  return <AppShell screen={screen} setScreen={setScreen} projects={projects} assets={assets}>{error && <div className="global-error">{error}<button onClick={() => setError("")}>×</button></div>}{screen === "library" && <Library assets={assets} projects={projects} onPatch={patchAsset} />}{screen === "jobs" && <Jobs jobs={jobs} projects={projects} reload={reload} />}{screen === "settings" && <SettingsPage health={health} refreshHealth={loadHealth} />}</AppShell>;
+  return <AppShell screen={screen} setScreen={setScreen} projects={projects} assets={assets}>{error && <div className="global-error">{error}<button onClick={() => setError("")}>×</button></div>}{screen === "library" && <Library assets={assets} projects={projects} onPatch={patchAsset} reloadAssets={loadAssets} />}{screen === "jobs" && <Jobs jobs={jobs} projects={projects} reload={reload} />}{screen === "settings" && <SettingsPage health={health} refreshHealth={loadHealth} />}</AppShell>;
 }

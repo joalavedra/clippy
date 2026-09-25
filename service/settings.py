@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass, field
 
@@ -26,7 +27,13 @@ class Settings:
     )
     media_token_ttl: int = field(
         default_factory=lambda: int(
-            os.environ.get("CLIPPY_MEDIA_TOKEN_TTL", "3600")
+            max(
+                60,
+                min(
+                    int(os.environ.get("CLIPPY_MEDIA_TOKEN_TTL", "3600")),
+                    86400,
+                ),
+            )
         )
     )
     media_secret: str | None = field(
@@ -51,8 +58,10 @@ class Settings:
 
     def __post_init__(self):
         self.data_dir = os.path.abspath(self.data_dir)
-        if self.media_secret is None:
-            self.media_secret = self.api_key
+        if self.media_secret is None and self.api_key is not None:
+            self.media_secret = hashlib.sha256(
+                b"clippy-media:" + self.api_key.encode()
+            ).hexdigest()
         if self.local_media_roots is None:
             raw_roots = os.environ.get("CLIPPY_LOCAL_MEDIA_ROOTS")
             if raw_roots:

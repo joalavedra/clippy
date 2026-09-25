@@ -330,7 +330,7 @@ def test_requeue_running_jobs(tmp_path):
 
 def test_api_key_and_protected_files(tmp_path):
     settings = _settings(tmp_path)
-    assert settings.media_secret == "test"
+    assert settings.media_secret != "test"
     protected = Path(settings.storage_root) / "hello.txt"
     protected.write_text("hello", encoding="utf-8")
     job = db.create_job(
@@ -378,6 +378,19 @@ def test_api_key_and_protected_files(tmp_path):
         assert client.get(f"/files/hello.txt?token={expired}").status_code == 401
         assert client.get(f"/files/hello.txt?token={tampered}").status_code == 401
         assert client.get("/files/../clippy.db").status_code == 404
+
+
+def test_media_secret_derivation_and_ttl_cap(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLIPPY_MEDIA_SECRET", raising=False)
+    monkeypatch.setenv("CLIPPY_MEDIA_TOKEN_TTL", "999999999")
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        worker_enabled=False,
+        api_key="x",
+        local_media_roots=[str(tmp_path / "uploads")],
+    )
+    assert settings.media_secret != "x"
+    assert settings.media_token_ttl == 86400
 
 
 def test_local_path_roots_and_url_policy(tmp_path):

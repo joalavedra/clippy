@@ -108,8 +108,9 @@ renders    id, asset_id, ratio, duration, file_key, thumb_key, recipe_clip(json)
 - `service/storage.py` — `Storage` protocol (`put(path, key) -> key`,
   `url(key)`), `LocalStorage(root)` served at `/files/{key}`. S3 later.
   API responses sign media URLs with short-lived per-file tokens when media
-  signing is configured; the files route accepts those tokens or the API-key
-  header, but never API keys in query parameters.
+  signing is configured; the signing secret is derived from the API key unless
+  `CLIPPY_MEDIA_SECRET` is set. The files route accepts those tokens or the
+  API-key header, but never API keys in query parameters.
 - `service/worker.py` — background thread; picks `queued` jobs, writes a
   per-job `sources.json`, builds the engine config with
   `clipping.config.build_config(argv)` exactly as the CLI would, calls
