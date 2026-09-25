@@ -88,6 +88,49 @@ lateral transitions"). Landscape output uses scale+pad.
   "what makes a clip shareable" section and the viral_score calibration; later,
   a small ranking model over candidate spans.
 
+### 2.1 Service layer v1 (`service/`)
+
+Implemented as a single process to start (API + one worker thread, SQLite,
+local disk), with the seams needed to split it later. Object model follows
+`docs/DESIGN_SYSTEM.md` §1 so a Library UI can sit directly on it.
+
+```
+projects   id, name, platform, url|local_path, layout, created_at        (= a source)
+jobs       id, brief, formats(json), clips, options(json), project_ids(json),
+           status queued|running|done|failed, stage, percent, error, created/updated
+job_events id, job_id, ts, stage, message
+assets     id, job_id, project_ids(json), clip_id, title, hook_line, rationale,
+           viral_score, hashtags(json), metadata(json), state, favorite, created_at
+renders    id, asset_id, ratio, duration, file_key, thumb_key, recipe_clip(json)
+```
+
+- `service/db.py` — sqlite3 (WAL), schema above, thin repository functions.
+- `service/storage.py` — `Storage` protocol (`put(path, key) -> key`,
+  `url(key)`), `LocalStorage(root)` served at `/files/{key}`. S3 later.
+- `service/worker.py` — background thread; picks `queued` jobs, writes a
+  per-job `sources.json`, builds the engine config with
+  `clipping.config.build_config(argv)` exactly as the CLI would, calls
+  `director.run_director(cfg, on_stage=...)`, then catalogs the returned
+  recipes + Story manifests into `assets`/`renders`, copying finals into
+  storage. Stages: `prepare` → `transcribe` → `direct:<ratio>` →
+  `render:<ratio>` → `catalog`.
+- `service/app.py` — FastAPI:
+
+```
+POST /api/projects            {name, platform, url|local_path, layout}
+GET  /api/projects
+POST /api/jobs                {project_ids, brief, formats:[{ratio,min,max}], clips, options}
+GET  /api/jobs  /api/jobs/{id}  /api/jobs/{id}/events
+GET  /api/assets?job_id&project_id&ratio&min_score&state&favorite
+GET  /api/assets/{id}
+PATCH /api/assets/{id}        {state?, favorite?}
+GET  /api/health
+```
+
+Not in v1: auth, multiple workers/queue (swap the thread for a queue consumer),
+publishing, covers, search. `web/api` (upstream GUI for the single-URL
+pipeline) is left untouched.
+
 ## 3. Known gaps / next work (priority order)
 
 1. **Two-speaker output in director mode** — port split-screen / camera-switch

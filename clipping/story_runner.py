@@ -111,7 +111,10 @@ def _prepare_source_cache(
     cache_dir: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Download or resolve Story sources and save their status."""
-    cache_dir = cache_dir or source_manager.get_cache_dir(cfg.outputs_dir)
+    cache_dir = cache_dir or source_manager.get_cache_dir(
+        cfg.outputs_dir,
+        getattr(cfg, "story_cache_dir", None),
+    )
     skip_download = getattr(cfg, "skip_download", False)
 
     if skip_download:

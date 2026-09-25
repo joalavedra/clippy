@@ -343,12 +343,17 @@ def validate_recipe(recipe, transcripts_meta):
     return recipe
 
 
-def run_director(cfg):
+def run_director(cfg, on_stage=None):
     """Run source preparation, Gemini recipe generation, validation, and Story."""
     sources_path = getattr(cfg, "sources_json_path", "sources.json")
     sources = loader.load_sources(sources_path)
-    cache_dir = source_manager.get_cache_dir(cfg.outputs_dir)
+    cache_dir = source_manager.get_cache_dir(
+        cfg.outputs_dir,
+        getattr(cfg, "story_cache_dir", None),
+    )
 
+    if on_stage:
+        on_stage("transcribe", "")
     transcript_meta, transcripts = _load_transcript_bundle(
         sources, cache_dir, cfg
     )
@@ -385,6 +390,8 @@ def run_director(cfg):
             f"for {ratio} [{min_duration:g}-{max_duration:g}s] "
             f"and brief: {cfg.brief}"
         )
+        if on_stage:
+            on_stage("direct", ratio)
         gemini_started = time.perf_counter()
         recipe = generate_recipe(
             transcripts=transcripts,
@@ -426,6 +433,8 @@ def run_director(cfg):
 
         render_result = None
         if not getattr(cfg, "director_dry_run", False):
+            if on_stage:
+                on_stage("render", ratio)
             render_result = story_runner.run_story_pipeline(cfg)
         all_results.append(
             {

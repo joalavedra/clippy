@@ -17,9 +17,9 @@ import shutil
 # CACHE DIRECTORY
 # ==============================================================================
 
-def get_cache_dir(outputs_dir: str) -> str:
+def get_cache_dir(outputs_dir: str, cache_dir: str | None = None) -> str:
     """Return (and create) the story source cache directory."""
-    cache_dir = os.path.join(outputs_dir, "story_cache")
+    cache_dir = cache_dir or os.path.join(outputs_dir, "story_cache")
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
 
