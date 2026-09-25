@@ -32,6 +32,9 @@ LOGGER = logging.getLogger(__name__)
 def _render_response(render: dict, storage: LocalStorage) -> dict:
     render = dict(render)
     render["url"] = storage.url(render["file_key"])
+    render["thumb_url"] = (
+        storage.url(render["thumb_key"]) if render.get("thumb_key") else None
+    )
     return render
 
 
@@ -76,11 +79,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     def require_api_key():
-        def dependency(x_api_key: str | None = Header(default=None)):
+        def dependency(
+            x_api_key: str | None = Header(default=None),
+            api_key: str | None = Query(default=None),
+        ):
             if settings.api_key is None:
                 return
-            if not x_api_key or not hmac.compare_digest(
-                x_api_key, settings.api_key
+            provided_key = x_api_key if x_api_key is not None else api_key
+            if not provided_key or not hmac.compare_digest(
+                provided_key, settings.api_key
             ):
                 raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -217,6 +224,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not candidate.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(str(candidate))
+
+    web_ui_dist = Path(__file__).resolve().parent.parent / "web-ui" / "dist"
+    if web_ui_dist.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount(
+            "/",
+            StaticFiles(directory=str(web_ui_dist), html=True),
+            name="web-ui",
+        )
 
     return app
 

@@ -125,6 +125,7 @@ class Render(BaseModel):
     thumb_key: str | None = None
     recipe_clip: dict
     url: str
+    thumb_url: str | None = None
 
 
 class Asset(BaseModel):

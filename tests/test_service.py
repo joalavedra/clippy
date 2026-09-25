@@ -315,6 +315,7 @@ def test_api_key_and_protected_files(tmp_path):
         client.headers.update({"X-API-Key": "test"})
         assert client.get("/api/projects").status_code == 200
         assert client.get("/files/hello.txt").status_code == 200
+        assert client.get("/files/hello.txt?api_key=test").status_code == 200
         assert client.get("/files/../clippy.db").status_code == 404
 
 
