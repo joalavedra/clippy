@@ -163,6 +163,7 @@ def download_all_sources(
     cookies_file: str | None = None,
     retries: int = 2,
     strict: bool = True,
+    outputs_dir: str | None = None,
 ) -> dict[str, str]:
     """
     Download all sources listed in the registry.
@@ -232,6 +233,11 @@ def download_all_sources(
         first_error.detail = (
             f"{first_error.detail}\nFailed sources: {', '.join(failed)}"
         )
+        save_sources_status(
+            source_registry,
+            paths,
+            outputs_dir or cache_dir,
+        )
         raise first_error
 
     return paths
@@ -271,6 +277,7 @@ def save_sources_status(
         status_entries.append(entry)
 
     status_path = os.path.join(outputs_dir, "sources_status.json")
+    os.makedirs(outputs_dir, exist_ok=True)
     with open(status_path, "w", encoding="utf-8") as f:
         json.dump({"sources": status_entries}, f, indent=2, ensure_ascii=False)
 

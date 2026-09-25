@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 REASONS = {
     "bot_check",
     "private_or_removed",
@@ -11,6 +13,18 @@ REASONS = {
     "network",
     "unknown",
 }
+
+
+def sanitize_detail(detail: str) -> str:
+    """Remove URLs and credential-like values from download diagnostics."""
+    sanitized = re.sub(r"\?[^\s]*", "", str(detail))
+    sanitized = re.sub(
+        r"(?i)(cookie|authorization|token|session)[=:]\s*\S+",
+        r"\1=<redacted>",
+        sanitized,
+    )
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    return sanitized[:300]
 
 
 class DownloadError(RuntimeError):
@@ -24,8 +38,11 @@ class DownloadError(RuntimeError):
     ):
         self.reason = reason if reason in REASONS else "unknown"
         self.source_id = source_id
-        self.detail = detail
-        super().__init__(detail or self.reason)
+        self.detail = sanitize_detail(detail)
+        super().__init__(self.detail or self.reason)
+
+    def __str__(self) -> str:
+        return self.detail or self.reason
 
 
 def classify_download_error(exc: Exception) -> str:
@@ -96,5 +113,5 @@ def user_message(error: DownloadError) -> str:
     }
     message = messages.get(error.reason, messages["unknown"])
     if error.reason == "unknown" and error.detail:
-        return f"{message} Details: {error.detail}"
+        return f"{message} Details: {sanitize_detail(error.detail)}"
     return message

@@ -139,6 +139,7 @@ def _prepare_source_cache(
             getattr(cfg, "ytdlp_cookies", None),
             getattr(cfg, "download_retries", 2),
             getattr(cfg, "strict_sources", False),
+            cfg.outputs_dir,
         )
 
     source_manager.save_sources_status(

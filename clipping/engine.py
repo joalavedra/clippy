@@ -126,6 +126,15 @@ def _ydl_progress_hook(d: dict) -> None:
         print(flush=True)  # tutup baris bar untuk stream ini
 
 
+def _remove_partial_downloads(output_path: str) -> None:
+    """Remove files yt-dlp may leave behind after a failed attempt."""
+    for path in (output_path, f"{output_path}.part"):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
 def download_video(
     url: str,
     output_path: str,
@@ -247,6 +256,7 @@ def download_video(
                 ydl.download([url])
             break
         except Exception as exc:
+            _remove_partial_downloads(output_path)
             reason = classify_download_error(exc)
             if reason in {"private_or_removed", "geo_blocked"}:
                 raise DownloadError(reason, detail=str(exc)) from exc
