@@ -29,7 +29,9 @@ class Settings:
             os.environ.get("CLIPPY_MEDIA_TOKEN_TTL", "3600")
         )
     )
-    media_secret: str | None = None
+    media_secret: str | None = field(
+        default_factory=lambda: os.environ.get("CLIPPY_MEDIA_SECRET")
+    )
     local_media_roots: list[str] | None = None
     cors_origins: list[str] = field(
         default_factory=lambda: [
