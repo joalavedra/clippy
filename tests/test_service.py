@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from service import db
 from service.app import create_app
+from service.media_tokens import sign_media_token
 from service.settings import Settings
 from service.storage import LocalStorage
 from service.worker import Worker, catalog_results
@@ -329,8 +330,31 @@ def test_requeue_running_jobs(tmp_path):
 
 def test_api_key_and_protected_files(tmp_path):
     settings = _settings(tmp_path)
+    assert settings.media_secret == "test"
     protected = Path(settings.storage_root) / "hello.txt"
     protected.write_text("hello", encoding="utf-8")
+    job = db.create_job(
+        settings.db_path,
+        brief="brief",
+        formats=[{"ratio": "9:16", "min": 8, "max": 12}],
+        clips=1,
+        options={},
+        project_ids=[],
+    )
+    asset = db.create_asset(
+        settings.db_path,
+        job_id=job["id"],
+        project_ids=[],
+        clip_id=1,
+        title="Clip",
+    )
+    db.create_render(
+        settings.db_path,
+        asset_id=asset["id"],
+        ratio="9:16",
+        duration=1,
+        file_key="hello.txt",
+    )
     app = create_app(settings)
     with TestClient(app) as client:
         assert client.get("/api/projects").status_code == 401
@@ -341,7 +365,18 @@ def test_api_key_and_protected_files(tmp_path):
         assert client.get("/api/projects").status_code == 200
         assert client.get("/files/hello.txt").status_code == 200
         client.headers.pop("X-API-Key")
-        assert client.get("/files/hello.txt?api_key=test").status_code == 200
+        assert client.get("/files/hello.txt?api_key=test").status_code == 401
+        client.headers.update({"X-API-Key": "test"})
+        media_url = client.get("/api/assets").json()[0]["renders"][0]["url"]
+        client.headers.pop("X-API-Key")
+        assert client.get(media_url).status_code == 200
+        token = media_url.partition("?token=")[2]
+        wrong_key = sign_media_token("test", "other.txt", 2_000_000_000)
+        expired = sign_media_token("test", "hello.txt", 1)
+        tampered = f"{token[:-1]}{'0' if token[-1] != '0' else '1'}"
+        assert client.get(f"/files/hello.txt?token={wrong_key}").status_code == 401
+        assert client.get(f"/files/hello.txt?token={expired}").status_code == 401
+        assert client.get(f"/files/hello.txt?token={tampered}").status_code == 401
         assert client.get("/files/../clippy.db").status_code == 404
 
 
