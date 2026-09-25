@@ -224,6 +224,8 @@ def _concat_with_crossfade(
     Concatenate with crossfade transitions between scenes using xfade filter.
     All inputs must already be normalized to the same resolution/fps.
     """
+    durations = [_probe_duration(path) for path in scene_paths]
+
     if len(scene_paths) == 2:
         # Simple case: 2 inputs with 1 xfade
         cmd = [
@@ -231,7 +233,8 @@ def _concat_with_crossfade(
             "-i", scene_paths[0],
             "-i", scene_paths[1],
             "-filter_complex",
-            f"[0:v][1:v]xfade=transition=fade:duration={fade_duration}:offset=0[v];"
+            f"[0:v][1:v]xfade=transition=fade:duration={fade_duration}:"
+            f"offset={durations[0] - fade_duration:.6f}[v];"
             f"[0:a][1:a]acrossfade=d={fade_duration}[a]",
             "-map", "[v]", "-map", "[a]",
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
@@ -248,6 +251,7 @@ def _concat_with_crossfade(
     os.makedirs(temp_dir, exist_ok=True)
 
     current = scene_paths[0]
+    cumulative_duration = durations[0]
     for i in range(1, len(scene_paths)):
         temp_out = os.path.join(temp_dir, f"xfade_{i}.mp4")
         cmd = [
@@ -255,7 +259,8 @@ def _concat_with_crossfade(
             "-i", current,
             "-i", scene_paths[i],
             "-filter_complex",
-            f"[0:v][1:v]xfade=transition=fade:duration={fade_duration}:offset=0[v];"
+            f"[0:v][1:v]xfade=transition=fade:duration={fade_duration}:"
+            f"offset={cumulative_duration - fade_duration:.6f}[v];"
             f"[0:a][1:a]acrossfade=d={fade_duration}[a]",
             "-map", "[v]", "-map", "[a]",
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
@@ -264,10 +269,30 @@ def _concat_with_crossfade(
         ]
         _run_ffmpeg(cmd, label=f"crossfade_{i}")
         current = temp_out
+        cumulative_duration += durations[i] - fade_duration
 
     shutil.copy2(current, output_path)
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
+
+
+def _probe_duration(video_path: str) -> float:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            video_path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return float(result.stdout.strip())
 
 
 # ==============================================================================

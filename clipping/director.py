@@ -138,6 +138,81 @@ def _source_duration(source_id: str, transcripts_meta: dict) -> float:
     return _probe_duration(video_path)
 
 
+def snap_scene_to_words(scene: dict, segmen: list[dict]) -> bool:
+    """Snap scene boundaries to nearby transcript word timestamps."""
+    words = []
+    for segment in segmen or []:
+        for word in segment.get("words", []):
+            try:
+                words.append(
+                    {
+                        "word": str(word["word"]),
+                        "start": float(word["start"]),
+                        "end": float(word["end"]),
+                    }
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+    words.sort(key=lambda word: (word["start"], word["end"]))
+    if not words:
+        return False
+
+    old_start = float(scene["start"])
+    old_end = float(scene["end"])
+    new_start = old_start
+    new_end = old_end
+
+    start_matches = [
+        word for word in words if abs(word["start"] - old_start) <= 0.6
+    ]
+    start_word = min(
+        start_matches,
+        key=lambda word: abs(word["start"] - old_start),
+        default=None,
+    )
+    if start_word is not None:
+        start_index = words.index(start_word)
+        candidate_start = max(0.0, start_word["start"] - 0.15)
+        if start_index:
+            candidate_start = max(candidate_start, words[start_index - 1]["end"])
+        new_start = candidate_start
+
+    end_matches = [
+        word for word in words if abs(word["end"] - old_end) <= 0.6
+    ]
+    end_word = min(
+        end_matches,
+        key=lambda word: abs(word["end"] - old_end),
+        default=None,
+    )
+    if end_word is not None:
+        end_index = words.index(end_word)
+        punctuation = '.?!…'
+        text = end_word["word"].strip().rstrip(
+            "\"'”’)]}》」』"
+        )
+        if not text.endswith(tuple(punctuation)):
+            for candidate in words[end_index + 1 :]:
+                candidate_text = candidate["word"].strip().rstrip(
+                    "\"'”’)]}》」』"
+                )
+                if candidate_text.endswith(tuple(punctuation)):
+                    if candidate["end"] - end_word["end"] <= 4.0:
+                        end_word = candidate
+                        end_index = words.index(candidate)
+                    break
+
+        candidate_end = end_word["end"] + 0.25
+        if end_index + 1 < len(words):
+            candidate_end = min(candidate_end, words[end_index + 1]["start"] - 0.05)
+            candidate_end = max(candidate_end, end_word["end"])
+        new_end = candidate_end
+
+    scene["start"] = new_start
+    scene["end"] = new_end
+    return new_start != old_start or new_end != old_end
+
+
 def _clamp_scene(scene: dict, transcripts_meta: dict, section: str) -> bool:
     source_id = scene.get("source_id")
     if source_id not in transcripts_meta:
@@ -164,10 +239,29 @@ def _clamp_scene(scene: dict, transcripts_meta: dict, section: str) -> bool:
     scene["start"] = clamped_start
     scene["end"] = clamped_end
 
-    if clamped_end - clamped_start < 2.0:
+    metadata = transcripts_meta[source_id]
+    old_start, old_end = scene["start"], scene["end"]
+    snap_scene_to_words(scene, metadata.get("segmen", []))
+    if (
+        abs(scene["start"] - old_start) > 0.05
+        or abs(scene["end"] - old_end) > 0.05
+    ):
+        snapped_end_word = ""
+        for segment in metadata.get("segmen", []):
+            for word in segment.get("words", []):
+                if abs(float(word.get("end", -1)) - (scene["end"] - 0.25)) < 0.3:
+                    snapped_end_word = str(word.get("word", "")).strip()
+        print(
+            f'🔧 snapped {source_id} '
+            f'[{old_start:.2f}→{scene["start"]:.2f}, '
+            f'{old_end:.2f}→{scene["end"]:.2f}]'
+            + (f' ends on "{snapped_end_word}"' if snapped_end_word else "")
+        )
+
+    if scene["end"] - scene["start"] < 2.0:
         print(
             f"⚠️ Dropping {section} scene from '{source_id}': "
-            f"duration {clamped_end - clamped_start:.3f}s is below 2.0s."
+            f"duration {scene['end'] - scene['start']:.3f}s is below 2.0s."
         )
         return False
     return True
@@ -275,5 +369,7 @@ def run_director(cfg):
     if getattr(cfg, "director_dry_run", False):
         return recipe
 
+    if getattr(cfg, "story_style", None) is None:
+        cfg.story_style = "styled"
     cfg.story_recipe_path = recipe_path
     return story_runner.run_story_pipeline(cfg)

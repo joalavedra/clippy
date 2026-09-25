@@ -616,6 +616,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Skip source downloads and use existing cached files.",
     )
+    story_group.add_argument(
+        "--story-style",
+        choices=["clean", "styled"],
+        default=None,
+        help="Story render style. Director defaults to styled; Story mode defaults to clean.",
+    )
 
     # --- Director Stage ---
     director_group = p.add_argument_group("Director Stage")
@@ -944,6 +950,7 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
             else os.path.join(outputs_dir, "story_clips")
         ),
         skip_download=args.skip_download,
+        story_style=args.story_style,
         # Director Stage
         director=args.director,
         brief=args.brief,
