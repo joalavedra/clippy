@@ -15,7 +15,7 @@ from clipping.config import build_config
 from clipping import director
 from clipping.ingest_errors import DownloadError, user_message
 
-from . import db
+from . import db, search
 from .settings import Settings
 from .storage import LocalStorage, Storage
 
@@ -328,6 +328,35 @@ class Worker(threading.Thread):
                 catalog_results(conn, storage, job, results)
             finally:
                 conn.close()
+            embedder = search.make_embedder(self.settings)
+            for project in projects:
+                transcript_path = os.path.join(
+                    self.settings.cache_dir,
+                    f"{project['id']}_transcript.json",
+                )
+                if not os.path.isfile(transcript_path):
+                    search.delete_project(self.settings.db_path, project["id"])
+                    continue
+                try:
+                    with open(transcript_path, encoding="utf-8") as handle:
+                        transcript = json.load(handle)
+                    search.index_project(
+                        self.settings.db_path,
+                        project["id"],
+                        transcript,
+                        embedder=embedder,
+                    )
+                except Exception as exc:
+                    message = (
+                        f"Search index warning for {project['id']}: {exc}"
+                    )
+                    LOGGER.warning(message)
+                    db.add_event(
+                        self.settings.db_path,
+                        job_id,
+                        "index_warning",
+                        message,
+                    )
             db.update_job(
                 self.settings.db_path,
                 job_id,

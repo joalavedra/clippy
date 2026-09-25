@@ -28,6 +28,9 @@ class Settings:
     api_key: str | None = field(
         default_factory=lambda: os.environ.get("CLIPPY_API_KEY")
     )
+    gemini_api_key: str | None = field(
+        default_factory=lambda: os.environ.get("GOOGLE_API_KEY")
+    )
     media_token_ttl: int = field(
         default_factory=lambda: int(
             max(
