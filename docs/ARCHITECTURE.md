@@ -127,9 +127,11 @@ PATCH /api/assets/{id}        {state?, favorite?}
 GET  /api/health
 ```
 
-Not in v1: auth, multiple workers/queue (swap the thread for a queue consumer),
-publishing, covers, search. `web/api` (upstream GUI for the single-URL
-pipeline) is left untouched.
+Not in v1: multiple workers/queue (swap the thread for a queue consumer),
+publishing, covers, search. The API key and local-media-root checks define the
+v1 trust boundary for this local service; production auth and identity are
+still future work. `web/api` (upstream GUI for the single-URL pipeline) is
+left untouched.
 
 ## 3. Known gaps / next work (priority order)
 

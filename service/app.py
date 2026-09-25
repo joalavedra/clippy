@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import hmac
+import logging
+import os
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from . import db
 from .models import (
@@ -21,6 +25,8 @@ from .models import (
 from .settings import Settings
 from .storage import LocalStorage
 from .worker import Worker
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _render_response(render: dict, storage: LocalStorage) -> dict:
@@ -39,6 +45,10 @@ def _asset_response(asset: dict, storage: LocalStorage) -> dict:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    if settings.api_key is None:
+        LOGGER.warning(
+            "CLIPPY_API_KEY unset: API is unauthenticated (local dev only)"
+        )
     conn = db.connect(settings.db_path)
     db.init_schema(conn)
     conn.close()
@@ -64,19 +74,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.mount("/files", StaticFiles(directory=settings.storage_root), name="files")
 
-    @app.post("/api/projects", response_model=Project)
+    def require_api_key():
+        def dependency(x_api_key: str | None = Header(default=None)):
+            if settings.api_key is None:
+                return
+            if not x_api_key or not hmac.compare_digest(
+                x_api_key, settings.api_key
+            ):
+                raise HTTPException(status_code=401, detail="Invalid API key")
+
+        return dependency
+
+    require_api_key_dependency = require_api_key()
+    api_router = APIRouter(
+        prefix="/api",
+        dependencies=[Depends(require_api_key_dependency)],
+    )
+
+    @api_router.post("/projects", response_model=Project)
     def create_project(payload: ProjectCreate):
+        if payload.local_path:
+            local_path = os.path.realpath(payload.local_path)
+            roots = [Path(root).resolve() for root in settings.local_media_roots]
+            path = Path(local_path)
+            if not path.is_file() or not any(
+                path.is_relative_to(root) for root in roots
+            ):
+                root_text = ", ".join(str(root) for root in roots)
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "local_path must be an existing file under one of: "
+                        f"{root_text}"
+                    ),
+                )
+            payload = payload.model_copy(update={"local_path": local_path})
         return db.create_project(
             settings.db_path, **payload.model_dump()
         )
 
-    @app.get("/api/projects", response_model=list[Project])
+    @api_router.get("/projects", response_model=list[Project])
     def list_projects():
         return db.list_projects(settings.db_path)
 
-    @app.post("/api/jobs", response_model=Job)
+    @api_router.post("/jobs", response_model=Job)
     def create_job(payload: JobCreate):
         for project_id in payload.project_ids:
             if not db.get_project(settings.db_path, project_id):
@@ -93,24 +135,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             options=payload.options.model_dump(),
         )
 
-    @app.get("/api/jobs", response_model=list[Job])
+    @api_router.get("/jobs", response_model=list[Job])
     def list_jobs():
         return db.list_jobs(settings.db_path)
 
-    @app.get("/api/jobs/{job_id}", response_model=Job)
+    @api_router.get("/jobs/{job_id}", response_model=Job)
     def get_job(job_id: str):
         job = db.get_job(settings.db_path, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         return job
 
-    @app.get("/api/jobs/{job_id}/events", response_model=list[JobEvent])
+    @api_router.get("/jobs/{job_id}/events", response_model=list[JobEvent])
     def list_job_events(job_id: str):
         if not db.get_job(settings.db_path, job_id):
             raise HTTPException(status_code=404, detail="Job not found")
         return db.list_events(settings.db_path, job_id)
 
-    @app.get("/api/assets", response_model=list[Asset])
+    @api_router.get("/assets", response_model=list[Asset])
     def list_assets(
         job_id: str | None = None,
         project_id: str | None = None,
@@ -130,14 +172,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return [_asset_response(row, storage) for row in rows]
 
-    @app.get("/api/assets/{asset_id}", response_model=Asset)
+    @api_router.get("/assets/{asset_id}", response_model=Asset)
     def get_asset(asset_id: str):
         asset = db.get_asset(settings.db_path, asset_id)
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
         return _asset_response(asset, storage)
 
-    @app.patch("/api/assets/{asset_id}", response_model=Asset)
+    @api_router.patch("/assets/{asset_id}", response_model=Asset)
     def patch_asset(asset_id: str, payload: AssetPatch):
         asset = db.update_asset(
             settings.db_path,
@@ -149,6 +191,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Asset not found")
         return _asset_response(asset, storage)
 
+    app.include_router(api_router)
+
     @app.get("/api/health")
     def health():
         worker = getattr(app.state, "worker", None)
@@ -158,6 +202,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "queued": db.count_jobs(settings.db_path, "queued"),
             "running": db.count_jobs(settings.db_path, "running"),
         }
+
+    @app.get("/files/{key:path}", dependencies=[Depends(require_api_key_dependency)])
+    def get_file(key: str):
+        try:
+            candidate = Path(storage.path(key)).resolve()
+        except ValueError:
+            raise HTTPException(status_code=404, detail="File not found")
+        root = Path(settings.storage_root).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="File not found")
+        if not candidate.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(str(candidate))
 
     return app
 

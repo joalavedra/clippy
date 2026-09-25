@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -11,6 +12,19 @@ Platform = Literal["youtube", "local", "tiktok", "instagram", "gdrive"]
 Layout = Literal["single", "podcast"]
 Ratio = Literal["9:16", "16:9", "1:1"]
 AssetState = Literal["not_planned", "planned", "ready", "posted"]
+
+PLATFORM_HOSTS = {
+    "youtube": {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "youtu.be",
+        "music.youtube.com",
+    },
+    "tiktok": {"tiktok.com", "www.tiktok.com", "vm.tiktok.com", "vt.tiktok.com"},
+    "instagram": {"instagram.com", "www.instagram.com"},
+    "gdrive": {"drive.google.com", "docs.google.com"},
+}
 
 
 class ProjectCreate(BaseModel):
@@ -24,6 +38,17 @@ class ProjectCreate(BaseModel):
     def exactly_one_source(self):
         if bool(self.url) == bool(self.local_path):
             raise ValueError("exactly one of url or local_path is required")
+        if (self.platform == "local") != bool(self.local_path):
+            raise ValueError(
+                "platform must be local exactly when local_path is provided"
+            )
+        if self.url:
+            parsed = urlparse(self.url)
+            hostname = (parsed.hostname or "").lower()
+            if parsed.scheme.lower() not in {"http", "https"}:
+                raise ValueError("url must use http or https")
+            if hostname not in PLATFORM_HOSTS.get(self.platform, set()):
+                raise ValueError("url host is not allowed for this platform")
         return self
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -13,7 +14,12 @@ from service.worker import Worker, catalog_results
 
 
 def _settings(tmp_path):
-    return Settings(data_dir=str(tmp_path / "data"), worker_enabled=False)
+    return Settings(
+        data_dir=str(tmp_path / "data"),
+        worker_enabled=False,
+        api_key="test",
+        local_media_roots=[str(tmp_path / "uploads")],
+    )
 
 
 def _recipe_clip(clip_id=1):
@@ -57,14 +63,17 @@ def _fake_results(tmp_path):
 
 def test_create_project_and_job_api(tmp_path):
     settings = _settings(tmp_path)
+    media_path = Path(settings.local_media_roots[0]) / "demo.mp4"
+    media_path.write_bytes(b"video")
     app = create_app(settings)
     with TestClient(app) as client:
+        client.headers.update({"X-API-Key": "test"})
         response = client.post(
             "/api/projects",
             json={
                 "name": "Local demo",
                 "platform": "local",
-                "local_path": "/tmp/demo.mp4",
+                "local_path": str(media_path),
             },
         )
         assert response.status_code == 200
@@ -157,6 +166,7 @@ def test_asset_patch_api(tmp_path):
     )
     app = create_app(settings)
     with TestClient(app) as client:
+        client.headers.update({"X-API-Key": "test"})
         asset = client.get("/api/assets").json()[0]
         response = client.patch(
             f"/api/assets/{asset['id']}",
@@ -291,3 +301,63 @@ def test_requeue_running_jobs(tmp_path):
     assert db.list_events(settings.db_path, job["id"])[0]["message"] == (
         "requeued after restart"
     )
+
+
+def test_api_key_and_protected_files(tmp_path):
+    settings = _settings(tmp_path)
+    protected = Path(settings.storage_root) / "hello.txt"
+    protected.write_text("hello", encoding="utf-8")
+    app = create_app(settings)
+    with TestClient(app) as client:
+        assert client.get("/api/projects").status_code == 401
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/files/hello.txt").status_code == 401
+        client.headers.update({"X-API-Key": "test"})
+        assert client.get("/api/projects").status_code == 200
+        assert client.get("/files/hello.txt").status_code == 200
+        assert client.get("/files/../clippy.db").status_code == 404
+
+
+def test_local_path_roots_and_url_policy(tmp_path):
+    settings = _settings(tmp_path)
+    inside = Path(settings.local_media_roots[0]) / "inside.mp4"
+    inside.write_bytes(b"video")
+    outside = tmp_path / "outside.mp4"
+    outside.write_bytes(b"video")
+    app = create_app(settings)
+    with TestClient(app) as client:
+        client.headers.update({"X-API-Key": "test"})
+        outside_response = client.post(
+            "/api/projects",
+            json={
+                "name": "Outside",
+                "platform": "local",
+                "local_path": str(outside),
+            },
+        )
+        assert outside_response.status_code == 422
+        inside_response = client.post(
+            "/api/projects",
+            json={
+                "name": "Inside",
+                "platform": "local",
+                "local_path": str(inside),
+            },
+        )
+        assert inside_response.status_code == 200
+        assert inside_response.json()["local_path"] == os.path.realpath(inside)
+        for url in ("https://evil.example/video", "http://127.0.0.1/video"):
+            response = client.post(
+                "/api/projects",
+                json={"name": "Bad URL", "platform": "youtube", "url": url},
+            )
+            assert response.status_code == 422
+        allowed = client.post(
+            "/api/projects",
+            json={
+                "name": "YouTube",
+                "platform": "youtube",
+                "url": "https://youtu.be/example",
+            },
+        )
+        assert allowed.status_code == 200

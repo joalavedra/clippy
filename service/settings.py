@@ -21,6 +21,10 @@ class Settings:
     worker_enabled: bool = field(
         default_factory=lambda: _env_bool("CLIPPY_WORKER_ENABLED", True)
     )
+    api_key: str | None = field(
+        default_factory=lambda: os.environ.get("CLIPPY_API_KEY")
+    )
+    local_media_roots: list[str] | None = None
     cors_origins: list[str] = field(
         default_factory=lambda: [
             origin.strip()
@@ -39,11 +43,32 @@ class Settings:
 
     def __post_init__(self):
         self.data_dir = os.path.abspath(self.data_dir)
+        if self.local_media_roots is None:
+            raw_roots = os.environ.get("CLIPPY_LOCAL_MEDIA_ROOTS")
+            if raw_roots:
+                roots = raw_roots.split(",")
+            else:
+                roots = [os.path.join(self.data_dir, "uploads")]
+            self.local_media_roots = [
+                os.path.abspath(root.strip())
+                for root in roots
+                if root.strip()
+            ]
+        else:
+            self.local_media_roots = [
+                os.path.abspath(root) for root in self.local_media_roots
+            ]
         self.db_path = os.path.join(self.data_dir, "clippy.db")
         self.storage_root = os.path.join(self.data_dir, "files")
         self.work_dir = os.path.join(self.data_dir, "jobs")
         self.cache_dir = os.path.join(self.data_dir, "cache")
-        for path in (self.data_dir, self.storage_root, self.work_dir, self.cache_dir):
+        for path in (
+            self.data_dir,
+            self.storage_root,
+            self.work_dir,
+            self.cache_dir,
+            *self.local_media_roots,
+        ):
             os.makedirs(path, exist_ok=True)
 
     @classmethod
