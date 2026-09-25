@@ -58,39 +58,45 @@ def fallback_intervals(
                 and float(sample["time"]) == end
             )
         ]
+        if not in_shot:
+            continue
         coverage = (
             sum(bool(sample.get("detected", False)) for sample in in_shot)
             / len(in_shot)
-            if in_shot
-            else 0.0
         )
         shot_fallback = end - start >= min_len and coverage < min_coverage
         if shot_fallback:
             intervals.append((start, end))
             continue
-        if not in_shot or step <= 0:
+        if step <= 0:
             continue
 
         run_start = None
         run_length = 0
+        previous_miss_time = 0.0
         for sample in in_shot:
             if sample.get("detected", False):
+                if run_start is not None and run_length >= miss_run_length:
+                    intervals.append(
+                        (
+                            max(start, run_start),
+                            min(end, float(previous_miss_time) + step),
+                        )
+                    )
                 run_start = None
                 run_length = 0
                 continue
             if run_start is None:
                 run_start = float(sample["time"])
-                run_length = 0
             run_length += 1
-            if run_length >= miss_run_length:
-                intervals.append(
-                    (
-                        max(start, run_start),
-                        min(end, float(sample["time"]) + step),
-                    )
+            previous_miss_time = float(sample["time"])
+        if run_start is not None and run_length >= miss_run_length:
+            intervals.append(
+                (
+                    max(start, run_start),
+                    min(end, float(previous_miss_time) + step),
                 )
-                run_start = None
-                run_length = 0
+            )
 
     merged: list[tuple[float, float]] = []
     for start, end in sorted(intervals):
@@ -103,9 +109,17 @@ def fallback_intervals(
     return merged
 
 
-def in_intervals(intervals: list[tuple[float, float]], t: float) -> bool:
+def in_intervals(
+    intervals: list[tuple[float, float]],
+    t: float,
+    duration: float | None = None,
+) -> bool:
     """Return whether ``t`` falls inside any fallback interval."""
-    return any(start <= t < end for start, end in intervals)
+    return any(
+        start <= t < end
+        or (duration is not None and t == end and end >= duration)
+        for start, end in intervals
+    )
 
 
 def detect_cuts(

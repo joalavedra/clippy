@@ -423,7 +423,10 @@ def buat_video_hybrid(
             if _is_vertical_ratio(rasio):
                 # Vertical/square ratios: face-tracked crop
                 cx_base, cy_base = _get_pos(t)
-                if camera_path.in_intervals(fallback_intervals, t):
+                if camera_path.in_intervals(
+                    fallback_intervals,
+                    min(t, duration - 1e-3),
+                ):
                     fit_fn = (
                         fit_frame_pad
                         if fallback_mode == "pad"
@@ -521,7 +524,10 @@ def buat_video_hybrid(
                     f"TIME: {format_seconds(t)}",
                     (
                         "LAYOUT: FIT (fallback)"
-                        if camera_path.in_intervals(fallback_intervals, t)
+                        if camera_path.in_intervals(
+                            fallback_intervals,
+                            min(t, duration - 1e-3),
+                        )
                         else f"LAYOUT: FULL {rasio}"
                     ),
                     f"ANCHOR CX: {int(cx_base)}"
