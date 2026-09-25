@@ -33,7 +33,12 @@ def classify_download_error(exc: Exception) -> str:
     message = str(exc).lower()
     if "sign in to confirm you're not a bot" in message or "not a bot" in message:
         return "bot_check"
-    if "not available in your country" in message or "geo" in message:
+    if (
+        "not available in your country" in message
+        or "geo-restricted" in message
+        or "geo restricted" in message
+        or "geoblock" in message
+    ):
         return "geo_blocked"
     if (
         "private video" in message
