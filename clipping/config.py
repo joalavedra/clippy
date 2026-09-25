@@ -6,6 +6,7 @@ Menyimpan semua default value dan membangun config dari CLI args.
 
 import argparse
 import os
+import re
 from types import SimpleNamespace
 
 try:
@@ -25,6 +26,7 @@ FONT_DIR = os.path.abspath(os.path.join(BASE_DIR, "custom_fonts"))
 # 1. PENGATURAN UTAMA
 JUMLAH_CLIP = 7
 PILIHAN_RASIO = "9:16"
+DIRECTOR_FORMAT_RATIOS = {"9:16", "16:9", "1:1", "3:4", "4:5"}
 
 # 2. PENGATURAN KONTEN & HOOK
 MAX_KATA_PER_SUBTITLE = 5
@@ -672,6 +674,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Target maximum total clip duration in seconds.",
     )
     director_group.add_argument(
+        "--formats",
+        default=None,
+        help=(
+            "Director formats as comma-separated SPEC values, "
+            "for example 16:9/20-30,9:16/8-12."
+        ),
+    )
+    director_group.add_argument(
         "--director-recipe-out",
         default="outputs/director_recipe.json",
         help="Output path for the validated director recipe.",
@@ -822,6 +832,35 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         parser.error("--target-min must be greater than zero.")
     if args.target_max < args.target_min:
         parser.error("--target-max must be greater than or equal to --target-min.")
+    formats = None
+    if args.formats:
+        if not args.director:
+            parser.error("--formats is only valid with --director.")
+        formats = []
+        for raw_spec in args.formats.split(","):
+            spec = raw_spec.strip()
+            match = re.fullmatch(
+                r"([^/]+)/([0-9]+(?:\.[0-9]+)?)-([0-9]+(?:\.[0-9]+)?)",
+                spec,
+            )
+            if not match:
+                parser.error(
+                    f"Invalid --formats value '{spec}'. "
+                    "Expected <ratio>/<min>-<max>."
+                )
+            ratio, min_text, max_text = match.groups()
+            if ratio not in DIRECTOR_FORMAT_RATIOS:
+                parser.error(
+                    f"Invalid director format ratio '{ratio}'. "
+                    f"Choose from: {', '.join(sorted(DIRECTOR_FORMAT_RATIOS))}."
+                )
+            min_duration = float(min_text)
+            max_duration = float(max_text)
+            if min_duration <= 0 or max_duration < min_duration:
+                parser.error(
+                    f"Invalid duration range for --formats '{spec}'."
+                )
+            formats.append((ratio, min_duration, max_duration))
 
     # Validate watermark args
     if args.watermark:
@@ -990,6 +1029,7 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         brief=args.brief,
         target_min=args.target_min,
         target_max=args.target_max,
+        formats=formats,
         director_recipe_out=os.path.abspath(args.director_recipe_out),
         director_dry_run=args.director_dry_run,
         project_name=args.project_name,

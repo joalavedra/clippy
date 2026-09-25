@@ -54,6 +54,7 @@ def generate_recipe(
     num_clips,
     cfg,
     project_name,
+    response_path=None,
 ) -> dict:
     """Ask Gemini for a Story recipe matching the director schema."""
     import google.genai as genai
@@ -98,7 +99,9 @@ def generate_recipe(
         ),
     )
 
-    response_path = os.path.join(cfg.outputs_dir, "director_response.json")
+    response_path = response_path or os.path.join(
+        cfg.outputs_dir, "director_response.json"
+    )
     os.makedirs(os.path.dirname(response_path), exist_ok=True)
     with open(response_path, "w", encoding="utf-8") as f:
         json.dump(raw_response, f, ensure_ascii=False, indent=2)
@@ -350,38 +353,117 @@ def run_director(cfg):
     if not transcripts:
         raise RuntimeError("Director could not obtain any source transcripts.")
 
-    print(
-        f"🎬 Generating {cfg.jumlah_clip} director clip(s) with Gemini "
-        f"for brief: {cfg.brief}"
-    )
-    gemini_started = time.perf_counter()
-    recipe = generate_recipe(
-        transcripts=transcripts,
-        brief=cfg.brief,
-        ratio=cfg.pilihan_rasio,
-        min_duration=cfg.target_min,
-        max_duration=cfg.target_max,
-        num_clips=cfg.jumlah_clip,
-        cfg=cfg,
-        project_name=cfg.project_name,
-    )
-    transcript_meta["__director_limits__"] = {
-        "min_duration": cfg.target_min,
-        "max_duration": cfg.target_max,
-    }
-    validate_recipe(recipe, transcript_meta)
-    print(f"⏱️ Gemini/director stage: {time.perf_counter() - gemini_started:.2f}s")
+    format_specs = getattr(cfg, "formats", None) or [
+        (cfg.pilihan_rasio, cfg.target_min, cfg.target_max)
+    ]
+    recipe_stem, recipe_ext = os.path.splitext(cfg.director_recipe_out)
+    if not recipe_ext:
+        recipe_ext = ".json"
+    all_results = []
+    summary_rows = []
 
-    recipe_path = cfg.director_recipe_out
-    os.makedirs(os.path.dirname(recipe_path), exist_ok=True)
-    with open(recipe_path, "w", encoding="utf-8") as f:
-        json.dump(recipe, f, ensure_ascii=False, indent=2)
-    print(f"💾 Validated director recipe disimpan ke: {recipe_path}")
+    for ratio, min_duration, max_duration in format_specs:
+        slug = ratio.replace(":", "x")
+        recipe_path = (
+            f"{recipe_stem}_{slug}{recipe_ext}"
+            if getattr(cfg, "formats", None)
+            else cfg.director_recipe_out
+        )
+        response_path = (
+            os.path.join(cfg.outputs_dir, f"director_response_{slug}.json")
+            if getattr(cfg, "formats", None)
+            else os.path.join(cfg.outputs_dir, "director_response.json")
+        )
+        print(
+            f"🎬 Generating {cfg.jumlah_clip} director clip(s) with Gemini "
+            f"for {ratio} [{min_duration:g}-{max_duration:g}s] "
+            f"and brief: {cfg.brief}"
+        )
+        gemini_started = time.perf_counter()
+        recipe = generate_recipe(
+            transcripts=transcripts,
+            brief=cfg.brief,
+            ratio=ratio,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            num_clips=cfg.jumlah_clip,
+            cfg=cfg,
+            project_name=cfg.project_name,
+            response_path=response_path,
+        )
+        transcript_meta["__director_limits__"] = {
+            "min_duration": min_duration,
+            "max_duration": max_duration,
+        }
+        validate_recipe(recipe, transcript_meta)
+        print(
+            f"⏱️ Gemini/director stage ({ratio}): "
+            f"{time.perf_counter() - gemini_started:.2f}s"
+        )
 
-    if getattr(cfg, "director_dry_run", False):
-        return recipe
+        os.makedirs(os.path.dirname(recipe_path), exist_ok=True)
+        with open(recipe_path, "w", encoding="utf-8") as f:
+            json.dump(recipe, f, ensure_ascii=False, indent=2)
+        print(f"💾 Validated director recipe disimpan ke: {recipe_path}")
 
-    if getattr(cfg, "story_style", None) is None:
-        cfg.story_style = "styled"
-    cfg.story_recipe_path = recipe_path
-    return story_runner.run_story_pipeline(cfg)
+        cfg.pilihan_rasio = ratio
+        cfg.target_min = min_duration
+        cfg.target_max = max_duration
+        cfg.story_recipe_path = recipe_path
+        if getattr(cfg, "formats", None):
+            cfg.story_output_dir = os.path.join(
+                cfg.outputs_dir, cfg.project_name, slug
+            )
+        if getattr(cfg, "story_style", None) is None:
+            cfg.story_style = "styled"
+
+        render_result = None
+        if not getattr(cfg, "director_dry_run", False):
+            render_result = story_runner.run_story_pipeline(cfg)
+        all_results.append(
+            {
+                "format": ratio,
+                "slug": slug,
+                "recipe_path": recipe_path,
+                "response_path": response_path,
+                "render": render_result,
+                "recipe": recipe,
+            }
+        )
+        for clip in recipe.get("clips", []):
+            hook_scenes = clip.get("hook", {}).get("scenes", [])
+            highlight_scenes = clip.get("highlight", {}).get("scenes", [])
+            duration = sum(
+                float(scene["end"]) - float(scene["start"])
+                for scene in hook_scenes + highlight_scenes
+            )
+            sources_used = sorted(
+                {
+                    scene["source_id"]
+                    for scene in hook_scenes + highlight_scenes
+                }
+            )
+            summary_rows.append(
+                (
+                    ratio,
+                    clip.get("clip_id", "?"),
+                    clip.get("title", ""),
+                    duration,
+                    len(hook_scenes) + len(highlight_scenes),
+                    ", ".join(sources_used),
+                )
+            )
+
+    print("\nDirector format summary")
+    print("Format | Clip | Title | Duration | Scenes | Sources")
+    print("-" * 100)
+    for ratio, clip_id, title, duration, scene_count, sources_used in summary_rows:
+        print(
+            f"{ratio:>5} | {clip_id:>4} | {title[:35]:<35} | "
+            f"{duration:>7.2f}s | {scene_count:>6} | {sources_used}"
+        )
+    if getattr(cfg, "director_dry_run", False) and not getattr(
+        cfg, "formats", None
+    ):
+        return all_results[0]["recipe"]
+    return all_results

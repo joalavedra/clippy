@@ -83,6 +83,48 @@ RECIPE_SCHEMA = {
 }
 
 
+def format_guidance(ratio: str, min_duration: float, max_duration: float) -> str:
+    """Editorial strategy that changes with the target format."""
+    vertical = ratio in ("9:16", "3:4", "4:5", "1:1")
+    lines = []
+    if max_duration <= 15:
+        lines += [
+            "- MICRO clip: ONE idea only. The hook IS the clip: a single quotable",
+            "  sentence or exchange, optionally followed by one payoff sentence.",
+            "- The first spoken word must already be the claim/question. No setup.",
+            "- 1-2 scenes total. Prefer a hook.duration close to the total length;",
+            "  highlight.scenes may be a single short payoff or may equal the hook span.",
+        ]
+    elif max_duration <= 45:
+        lines += [
+            "- SHORT clip: hook (2.5-6s) + a complete argument that pays it off.",
+            "- Structure: claim -> reason/example -> quotable close. Cut every sentence",
+            "  that does not advance that arc.",
+            "- 2-4 scenes. Jumping between sources/speakers is welcome when it creates",
+            "  contrast or a question-answer pairing.",
+        ]
+    else:
+        lines += [
+            "- LONG clip: a self-contained mini-story with a beginning, turn, and end.",
+            "- Hook first, then let the speaker develop the idea; keep tangents out.",
+            "- Up to 6 scenes; keep chronology inside each source unless reordering",
+            "  clearly sharpens the payoff.",
+        ]
+    if vertical:
+        lines += [
+            "- Vertical, sound-on, caption-driven feed: favour moments with strong",
+            "  spoken lines (they become on-screen karaoke captions) and a single",
+            "  visible speaker; avoid spans that rely on slides or wide visuals.",
+        ]
+    else:
+        lines += [
+            "- Landscape (YouTube/X/LinkedIn feed): visuals carry more weight; spans",
+            "  that reference on-screen material or two-person exchanges are fine.",
+            "  Titles should read well as a video title, not just a caption.",
+        ]
+    return "\n".join(lines)
+
+
 def build_director_prompt(
     transcripts: dict[str, str],
     brief: str,
@@ -95,6 +137,7 @@ def build_director_prompt(
     sources_block = "\n\n".join(
         f"=== SOURCE id=\"{sid}\" ===\n{text}" for sid, text in transcripts.items()
     )
+    guidance = format_guidance(ratio, min_duration, max_duration)
     return f"""You are a short-form video editor and director. You will be given timestamped
 transcripts of one or more source videos and a creative brief. Your job is to
 produce an EDIT PLAN: {num_clips} clip(s), each assembled from one or more
@@ -113,6 +156,9 @@ TARGET FORMAT:
 - total duration per clip (hook + highlight): between {min_duration:.0f} and {max_duration:.0f} seconds. This is a hard constraint.
 - language of titles/descriptions: {language}
 
+FORMAT STRATEGY (how to edit for this specific format):
+{guidance}
+
 RULES FOR SCENES:
 1. Every scene is a span {{source_id, start, end}} that must lie inside a single
    source's transcript range. Use ONLY source_ids that appear above.
@@ -125,7 +171,7 @@ RULES FOR SCENES:
    be a complete idea.
 4. Do not repeat a span across clips.
 5. "hook.scenes": 1 scene, the single most arresting sentence or question
-   (2.5-6s) that makes a viewer stop scrolling. "hook.text" is a <=8-word on-screen
+   (2.5-6s, or most of the clip for a MICRO format) that makes a viewer stop scrolling. "hook.text" is a <=8-word on-screen
    caption that reframes it; "hook.type" is always "text_overlay"; "hook.duration"
    equals the hook scene's length.
 6. "highlight.scenes": the body. It may start with the hook span again only if it
