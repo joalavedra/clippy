@@ -669,6 +669,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Remove filler words and long dead-air gaps from Story scenes.",
     )
     story_group.add_argument(
+        "--reframe-fallback",
+        choices=["blur", "pad", "none"],
+        default="blur",
+        help="Vertical reframe behavior when face tracking has no coverage.",
+    )
+    story_group.add_argument(
+        "--fallback-face-coverage",
+        type=float,
+        default=0.3,
+        help="Minimum detected-face coverage required for vertical reframing.",
+    )
+    story_group.add_argument(
         "--strict-sources",
         action="store_true",
         default=False,
@@ -1070,6 +1082,8 @@ def build_config(argv: list[str] | None = None) -> SimpleNamespace:
         story_style=args.story_style,
         story_cut_sheets=not args.no_cut_sheets,
         clean_speech=args.clean_speech,
+        reframe_fallback=args.reframe_fallback,
+        fallback_face_coverage=args.fallback_face_coverage,
         strict_sources=args.strict_sources or args.director,
         ytdlp_cookies=args.ytdlp_cookies,
         download_retries=args.download_retries,
