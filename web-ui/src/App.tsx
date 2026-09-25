@@ -216,9 +216,12 @@ function AssetDrawer({
   onClose: () => void;
   onPatch: (asset: Asset, patch: { state?: AssetState; favorite?: boolean }) => void;
 }) {
-  const [selected, setSelected] = useState<Render>(asset.renders[0]);
+  const [selectedRenderId, setSelectedRenderId] = useState<string | null>(asset.renders[0]?.id ?? null);
   const [tab, setTab] = useState<"transcript" | "social" | "covers">("transcript");
-  useEffect(() => setSelected(asset.renders[0]), [asset]);
+  useEffect(() => setSelectedRenderId(asset.renders[0]?.id ?? null), [asset.id]);
+  const selected: Render | undefined = asset.renders.find((render) => render.id === selectedRenderId) ?? asset.renders[0];
+  const setSelected = (render: Render) => setSelectedRenderId(render.id);
+  const videoSrc = useMemo(() => fileUrl(selected?.url) ?? undefined, [selected?.id]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
@@ -233,7 +236,7 @@ function AssetDrawer({
         <div className="drawer-header"><div><div className="eyebrow">CLIP {asset.clip_id}</div><h2>{asset.title}</h2><div className="drawer-project">{asset.project_ids.map((id) => <Chip key={id}>{projectName(projects, id)}</Chip>)}</div></div><button className="close-button" onClick={onClose}>×</button></div>
         <div className="drawer-summary"><ScoreBadge score={asset.viral_score} />{selected && <DurationBadge duration={selected.duration} />}<StateChip state={asset.state} /></div>
         <div className="format-toggle">{asset.renders.map((render) => <button className={selected?.id === render.id ? "format-selected" : ""} key={render.id} onClick={() => setSelected(render)}>{render.ratio === "9:16" ? "Vertical" : render.ratio === "16:9" ? "Horizontal" : "Square"}<small>{render.ratio}</small></button>)}</div>
-        {selected && <video className={`drawer-video ratio-${selected.ratio.replace(":", "-")}`} controls src={fileUrl(selected.url) ?? undefined} />}
+        {selected && <video className={`drawer-video ratio-${selected.ratio.replace(":", "-")}`} controls src={videoSrc} />}
         <div className="drawer-tabs">{(["transcript", "social", "covers"] as const).map((item) => <button className={tab === item ? "tab-active" : ""} key={item} onClick={() => setTab(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}</div>
         <div className="drawer-panel">
           {tab === "transcript" && <div className="copy-blocks"><CopyBlock label="Hook" value={asset.hook_line} onCopy={copy} /><CopyBlock label="Why it works" value={asset.rationale} onCopy={copy} /></div>}
