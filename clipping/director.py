@@ -546,6 +546,9 @@ def run_director(cfg, on_stage=None):
             cfg.story_output_dir = os.path.join(
                 cfg.outputs_dir, cfg.project_name, slug
             )
+            cfg.story_manifest_path = os.path.join(
+                cfg.outputs_dir, f"story_manifest_{slug}.json"
+            )
         if getattr(cfg, "story_style", None) is None:
             cfg.story_style = "styled"
 
@@ -595,6 +598,10 @@ def run_director(cfg, on_stage=None):
                     cfg.project_name,
                     slug,
                     variant_slug,
+                )
+                cfg.story_manifest_path = os.path.join(
+                    cfg.outputs_dir,
+                    f"story_manifest_{slug}_{variant_slug}.json",
                 )
                 if on_stage:
                     on_stage("render", f"{ratio}>{variant}")

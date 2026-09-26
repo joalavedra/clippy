@@ -73,17 +73,28 @@ def test_run_director_renders_variants_from_one_recipe(tmp_path, monkeypatch):
     monkeypatch.setattr(director, "validate_recipe", lambda recipe, metadata, cfg=None: recipe)
 
     def render(current_cfg):
-        calls.append((current_cfg.pilihan_rasio, current_cfg.story_output_dir))
+        calls.append(
+            (
+                current_cfg.pilihan_rasio,
+                current_cfg.story_output_dir,
+                current_cfg.story_manifest_path,
+            )
+        )
         return [{"clip_id": 1, "final_path": f"{current_cfg.pilihan_rasio}.mp4"}]
 
     monkeypatch.setattr(director.story_runner, "run_story_pipeline", render)
     results = director.run_director(cfg, on_stage=lambda stage, label: stages.append((stage, label)))
 
     assert len(calls) == 2
-    assert calls[0] == ("9:16", str(tmp_path / "outputs" / "Variants" / "9x16"))
+    assert calls[0] == (
+        "9:16",
+        str(tmp_path / "outputs" / "Variants" / "9x16"),
+        str(tmp_path / "outputs" / "story_manifest_9x16.json"),
+    )
     assert calls[1] == (
         "16:9",
         str(tmp_path / "outputs" / "Variants" / "9x16" / "16x9"),
+        str(tmp_path / "outputs" / "story_manifest_9x16_16x9.json"),
     )
     assert cfg.pilihan_rasio == "9:16"
     assert results[0]["variants"][0]["format"] == "16:9"

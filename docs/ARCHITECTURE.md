@@ -40,7 +40,8 @@ format still gets a format-specific editorial strategy
 (`director_prompt.format_guidance`): micro
 clips (≤15 s) are one idea, short clips (≤45 s) are hook → argument → payoff,
 long clips are mini-stories; vertical vs landscape changes what visual material
-is acceptable.
+is acceptable. Each primary and variant render also gets its own
+`story_manifest_<format>.json` file so manifests cannot overwrite one another.
 
 Output is a `story_recipe_v1` document. Post-processing in `director.validate_recipe`:
 
