@@ -483,7 +483,7 @@ def run_director(cfg, on_stage=None):
     }
 
     format_specs = getattr(cfg, "formats", None) or [
-        (cfg.pilihan_rasio, cfg.target_min, cfg.target_max)
+        (cfg.pilihan_rasio, cfg.target_min, cfg.target_max, [])
     ]
     recipe_stem, recipe_ext = os.path.splitext(cfg.director_recipe_out)
     if not recipe_ext:
@@ -491,7 +491,7 @@ def run_director(cfg, on_stage=None):
     all_results = []
     summary_rows = []
 
-    for ratio, min_duration, max_duration in format_specs:
+    for ratio, min_duration, max_duration, variants in format_specs:
         slug = ratio.replace(":", "x")
         recipe_path = (
             f"{recipe_stem}_{slug}{recipe_ext}"
@@ -546,6 +546,9 @@ def run_director(cfg, on_stage=None):
             cfg.story_output_dir = os.path.join(
                 cfg.outputs_dir, cfg.project_name, slug
             )
+            cfg.story_manifest_path = os.path.join(
+                cfg.outputs_dir, f"story_manifest_{slug}.json"
+            )
         if getattr(cfg, "story_style", None) is None:
             cfg.story_style = "styled"
 
@@ -554,16 +557,15 @@ def run_director(cfg, on_stage=None):
             if on_stage:
                 on_stage("render", ratio)
             render_result = story_runner.run_story_pipeline(cfg)
-        all_results.append(
-            {
-                "format": ratio,
-                "slug": slug,
-                "recipe_path": recipe_path,
-                "response_path": response_path,
-                "render": render_result,
-                "recipe": recipe,
-            }
-        )
+        format_result = {
+            "format": ratio,
+            "slug": slug,
+            "recipe_path": recipe_path,
+            "response_path": response_path,
+            "render": render_result,
+            "recipe": recipe,
+            "variants": [],
+        }
         for clip in recipe.get("clips", []):
             hook_scenes = clip.get("hook", {}).get("scenes", [])
             highlight_scenes = clip.get("highlight", {}).get("scenes", [])
@@ -587,6 +589,54 @@ def run_director(cfg, on_stage=None):
                     ", ".join(sources_used),
                 )
             )
+        if not getattr(cfg, "director_dry_run", False):
+            for variant in variants:
+                variant_slug = variant.replace(":", "x")
+                cfg.pilihan_rasio = variant
+                cfg.story_output_dir = os.path.join(
+                    cfg.outputs_dir,
+                    cfg.project_name,
+                    slug,
+                    variant_slug,
+                )
+                cfg.story_manifest_path = os.path.join(
+                    cfg.outputs_dir,
+                    f"story_manifest_{slug}_{variant_slug}.json",
+                )
+                if on_stage:
+                    on_stage("render", f"{ratio}>{variant}")
+                variant_render = story_runner.run_story_pipeline(cfg)
+                variant_result = {
+                    "format": variant,
+                    "slug": f"{slug}_{variant_slug}",
+                    "render": variant_render,
+                }
+                format_result["variants"].append(variant_result)
+                for clip in recipe.get("clips", []):
+                    hook_scenes = clip.get("hook", {}).get("scenes", [])
+                    highlight_scenes = clip.get("highlight", {}).get("scenes", [])
+                    duration = sum(
+                        float(scene["end"]) - float(scene["start"])
+                        for scene in hook_scenes + highlight_scenes
+                    )
+                    sources_used = sorted(
+                        {
+                            scene["source_id"]
+                            for scene in hook_scenes + highlight_scenes
+                        }
+                    )
+                    summary_rows.append(
+                        (
+                            f"{variant} (variant of {ratio})",
+                            clip.get("clip_id", "?"),
+                            clip.get("title", ""),
+                            duration,
+                            len(hook_scenes) + len(highlight_scenes),
+                            ", ".join(sources_used),
+                        )
+                    )
+        cfg.pilihan_rasio = ratio
+        all_results.append(format_result)
 
     print("\nDirector format summary")
     print("Format | Clip | Title | Duration | Scenes | Sources")

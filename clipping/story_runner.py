@@ -295,7 +295,9 @@ def run_story_pipeline(cfg) -> list[dict]:
     # ------------------------------------------------------------------
     # Step 6 — Save manifest
     # ------------------------------------------------------------------
-    manifest_path = os.path.join(cfg.outputs_dir, "story_manifest.json")
+    manifest_path = getattr(cfg, "story_manifest_path", None) or os.path.join(
+        cfg.outputs_dir, "story_manifest.json"
+    )
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 

@@ -55,6 +55,7 @@ export interface JobFormat {
   ratio: Ratio;
   min: number;
   max: number;
+  variants?: Ratio[];
 }
 
 export interface JobOptions {

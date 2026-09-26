@@ -467,7 +467,7 @@ def _create_render_conn(conn: sqlite3.Connection, render: dict) -> None:
 
 def _attach_renders(conn: sqlite3.Connection, asset: dict) -> dict:
     rows = conn.execute(
-        "SELECT * FROM renders WHERE asset_id = ? ORDER BY id",
+        "SELECT * FROM renders WHERE asset_id = ? ORDER BY rowid",
         (asset["id"],),
     ).fetchall()
     asset["renders"] = [_render(row) for row in rows]

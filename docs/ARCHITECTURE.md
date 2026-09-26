@@ -33,11 +33,15 @@ by hand / in a UI without re-running the stages before it.
 ### 1.1 Director stage (the product-specific part)
 
 Input: transcripts of N sources, a natural-language brief, and a list of format
-specs (`--formats 16:9/20-30,9:16/8-12`). One Gemini call per format with a
-format-specific editorial strategy (`director_prompt.format_guidance`): micro
+specs (`--formats 16:9/20-30+9:16,9:16/8-12`). A `+ratio` suffix requests a
+variant render of the same recipe under the same asset; one Gemini call is made
+per primary format, while variants reuse that format's recipe. Each primary
+format still gets a format-specific editorial strategy
+(`director_prompt.format_guidance`): micro
 clips (≤15 s) are one idea, short clips (≤45 s) are hook → argument → payoff,
 long clips are mini-stories; vertical vs landscape changes what visual material
-is acceptable.
+is acceptable. Each primary and variant render also gets its own
+`story_manifest_<format>.json` file so manifests cannot overwrite one another.
 
 Output is a `story_recipe_v1` document. Post-processing in `director.validate_recipe`:
 
